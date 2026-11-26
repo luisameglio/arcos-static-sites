@@ -194,7 +194,7 @@ trait Arcos_Static_Sites_Exporter {
 					'posts_per_page'   => -1,
 					'orderby'          => 'ID',
 					'order'            => 'ASC',
-					'suppress_filters' => false,
+					'suppress_filters' => ! $wpml_active,
 				] );
 
 				if ( ! $front_id ) {
