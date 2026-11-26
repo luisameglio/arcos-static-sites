@@ -188,14 +188,24 @@ trait Arcos_Static_Sites_Exporter {
 				}
 
 				$front_id = (int) get_option( 'page_on_front' );
-				$ids      = get_posts( [
-					'post_type'        => $post_types,
-					'post_status'      => 'publish',
-					'posts_per_page'   => -1,
-					'orderby'          => 'ID',
-					'order'            => 'ASC',
-					'suppress_filters' => ! $wpml_active,
-				] );
+				$ids      = [];
+				foreach ( $post_types as $pt ) {
+					$q_args = [
+						'post_type'        => $pt,
+						'post_status'      => 'publish',
+						'posts_per_page'   => -1,
+						'orderby'          => 'ID',
+						'order'            => 'ASC',
+						'suppress_filters' => ! $wpml_active,
+					];
+					if ( ! $wpml_active ) {
+						$q_args['lang'] = '';
+					}
+					$pt_posts = get_posts( $q_args );
+					if ( ! empty( $pt_posts ) ) {
+						$ids = array_merge( $ids, $pt_posts );
+					}
+				}
 
 				if ( ! $front_id ) {
 					$home = ( $wpml_active && ! empty( $wpml_langs[ $lang_code ]['url'] ) )
@@ -268,13 +278,14 @@ trait Arcos_Static_Sites_Exporter {
 		wp_mkdir_p( $build_dir );
 
 		$log_id = self::create_export_log( [
-			'mode'     => $mode,
-			'delivery' => $delivery,
-			'label'    => $release_label,
-			'total'    => count( $items ),
-			'target'   => $resolved_target,
-			'note'     => $note,
-			'batch'    => $batch_size,
+			'mode'       => $mode,
+			'delivery'   => $delivery,
+			'label'      => $release_label,
+			'total'      => count( $items ),
+			'target'     => $resolved_target,
+			'note'       => $note,
+			'batch'      => $batch_size,
+			'post_types' => implode( ', ', $post_types ),
 		] );
 
 		if ( empty( $items ) ) {

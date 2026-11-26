@@ -34,6 +34,9 @@ trait Arcos_Static_Sites_Logs {
 			'Batch Size:  ' . ( $meta['batch'] ?? 4 ),
 			'Total URLs:  ' . ( $meta['total'] ?? 0 ),
 		];
+		if ( ! empty( $meta['post_types'] ) ) {
+			$header[] = 'Post Types:  ' . $meta['post_types'];
+		}
 		if ( ! empty( $meta['label'] ) ) {
 			$header[] = 'Label:       ' . $meta['label'];
 		}

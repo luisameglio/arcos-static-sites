@@ -255,6 +255,7 @@ trait Arcos_Static_Sites_Admin {
 			'orderby'          => 'post_type title',
 			'order'            => 'ASC',
 			'suppress_filters' => true,
+			'lang'             => '',
 		] );
 		$home_root = trailingslashit( home_url( '/' ) );
 		$env_checks = self::get_environment_checks();
