@@ -4,13 +4,25 @@ Tags: static site, bricks, bricksforge, seo, geo, polylang
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 8.0
-Stable tag: 1.9.2
+Stable tag: 1.9.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
 Generate clean, rate-limit-free static HTML/CSS/JS/media ZIP exports or push directly to a same-server live directory, with incremental delta builds, Bricks + Bricksforge Pro Forms bridging, SEOPress SEO/GEO optimization, and client-side blog filtering.
 
 == Changelog ==
+
+= 1.9.4 =
+* Added **Push via FTP / FTPS** and **Both (ZIP + FTP / FTPS)** delivery destinations with host, port, username, password, remote directory path, SSL/TLS (`ftp_ssl_connect`), Passive Mode (`PASV`), and a **Test FTP Connection** button.
+* Added **PHP FTP Extension** check to the **Server & PHP Readiness Checklist**.
+
+= 1.9.3 =
+* Added built-in GitHub Releases self-updater (`luisameglio/arcos-static-sites`) with private-repo Personal Access Token support (`ARCOS_STATIC_SITES_GITHUB_TOKEN` or admin UI), `Check for Updates Now` button, and GitHub Actions release packaging workflow.
+* Added a live **Server & PHP Readiness Checklist** (`PHP Version`, `memory_limit`, `max_execution_time`, `max_input_vars`, `ZipArchive`, writable storage, and `zlib.output_compression`) and improved AJAX error reporting to surface exact HTTP status and HTML error snippets instead of raw JSON parse failures.
+* Added persistent **Export Logs** (`uploads/arcos-static-sites/logs/`) recording each export's parameters, page logs, errors, and timing, with a table to **View**, **Download**, **Delete**, or **Clear All Logs**.
+* Added a **Cancel Export** button while an export is running to abort in-flight requests, clean up temporary build files, and mark the export log as cancelled.
+* Fixed client-side blog bridge (`#arcos-static-blog-bridge`) selecting the wrong `.brx-query-trail` when multiple query loops exist on a page (now matches `targetQueryId` from `data-brx-filter` / highest `data-max-pages`), fixed `perPage` fallback when `data-query-vars` is `[]`, and updated active radio filter styling.
+* Fixed `rewrite_urls()` missing bare home URLs without a trailing slash (such as Bricks Logo `<a class="brxe-logo" href="https://...">`).
 
 = 1.9.2 =
 * Increased `wp_remote_get()` timeout to 45 seconds with `@set_time_limit(120)` per batch, added automatic 1x retry on `cURL error 28` / `5xx` errors, and added a configurable **Pages per Batch** selector (`2`, `4`, `8`, defaulting to `4`) to prevent loopback timeouts on shared/managed hosts.

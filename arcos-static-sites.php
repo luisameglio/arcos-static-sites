@@ -2,9 +2,10 @@
 /**
  * Plugin Name: Arcos Static Sites
  * Description: Generate clean, rate-limit-free static HTML/CSS/JS/media ZIP exports or push directly to a same-server live directory, with incremental delta builds and Bricks + ACF dynamic tag form bridging.
- * Version: 1.9.2
+ * Version: 1.9.4
  * Author: Arcos Multimedia Group
  * License: GPL-2.0-or-later
+ * Update URI: https://github.com/luisameglio/arcos-static-sites
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -13,11 +14,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Arcos_Static_Sites {
 
-	const VERSION      = '1.9.2';
-	const NONCE_ACTION = 'arcos_static_sites_nonce';
-	const OPT_KEY      = 'arcos_static_sites_settings';
-	const MANIFEST_KEY = 'arcos_static_sites_manifest';
-	const RELEASES_KEY = 'arcos_static_sites_releases';
+	const VERSION          = '1.9.4';
+	const GITHUB_REPO      = 'luisameglio/arcos-static-sites';
+	const UPDATE_CACHE_KEY = 'arcos_static_sites_gh_update';
+	const NONCE_ACTION     = 'arcos_static_sites_nonce';
+	const OPT_KEY          = 'arcos_static_sites_settings';
+	const MANIFEST_KEY     = 'arcos_static_sites_manifest';
+	const RELEASES_KEY     = 'arcos_static_sites_releases';
+	const LOGS_KEY         = 'arcos_static_sites_logs';
 
 	public static function init() {
 		add_action( 'admin_menu', [ __CLASS__, 'add_admin_menu' ] );
@@ -26,6 +30,10 @@ class Arcos_Static_Sites {
 		add_action( 'rest_api_init', [ __CLASS__, 'register_rest_routes' ] );
 		add_filter( 'plugins_api', [ __CLASS__, 'filter_plugins_api' ], 20, 3 );
 		add_filter( 'plugin_row_meta', [ __CLASS__, 'filter_plugin_row_meta' ], 10, 2 );
+		add_filter( 'pre_set_site_transient_update_plugins', [ __CLASS__, 'filter_update_plugins' ] );
+		add_filter( 'http_request_args', [ __CLASS__, 'filter_http_request_args' ], 10, 2 );
+		add_filter( 'upgrader_source_selection', [ __CLASS__, 'filter_upgrader_source_selection' ], 10, 4 );
+		add_action( 'upgrader_process_complete', [ __CLASS__, 'on_upgrader_complete' ], 10, 2 );
 		add_action( 'wp_ajax_arcos_ss_init', [ __CLASS__, 'ajax_init' ] );
 		add_action( 'wp_ajax_arcos_ss_batch', [ __CLASS__, 'ajax_batch' ] );
 		add_action( 'wp_ajax_arcos_ss_zip', [ __CLASS__, 'ajax_zip' ] );
@@ -35,6 +43,15 @@ class Arcos_Static_Sites {
 		add_action( 'wp_ajax_arcos_ss_reset_manifest', [ __CLASS__, 'ajax_reset_manifest' ] );
 		add_action( 'wp_ajax_arcos_ss_check_dir', [ __CLASS__, 'ajax_check_dir' ] );
 		add_action( 'wp_ajax_arcos_ss_save_lock', [ __CLASS__, 'ajax_save_lock' ] );
+		add_action( 'wp_ajax_arcos_ss_save_github_token', [ __CLASS__, 'ajax_save_github_token' ] );
+		add_action( 'wp_ajax_arcos_ss_check_updates', [ __CLASS__, 'ajax_check_updates' ] );
+		add_action( 'wp_ajax_arcos_ss_get_log', [ __CLASS__, 'ajax_get_log' ] );
+		add_action( 'wp_ajax_arcos_ss_download_log', [ __CLASS__, 'ajax_download_log' ] );
+		add_action( 'wp_ajax_arcos_ss_delete_log', [ __CLASS__, 'ajax_delete_log' ] );
+		add_action( 'wp_ajax_arcos_ss_clear_logs', [ __CLASS__, 'ajax_clear_logs' ] );
+		add_action( 'wp_ajax_arcos_ss_log_error', [ __CLASS__, 'ajax_log_error' ] );
+		add_action( 'wp_ajax_arcos_ss_cancel', [ __CLASS__, 'ajax_cancel' ] );
+		add_action( 'wp_ajax_arcos_ss_test_ftp', [ __CLASS__, 'ajax_test_ftp' ] );
 	}
 
 	public static function add_admin_menu() {
@@ -81,19 +98,203 @@ class Arcos_Static_Sites {
 			return $res;
 		}
 		$changelog_html = self::parse_readme_changelog();
+		$release        = self::fetch_latest_github_release();
 		$info               = new stdClass();
 		$info->name         = 'Arcos Static Sites';
 		$info->slug         = 'arcos-static-sites';
 		$info->version      = self::VERSION;
-		$info->author       = '<a href="#">Arcos Multimedia Group</a>';
+		$info->author       = '<a href="https://github.com/' . esc_attr( self::GITHUB_REPO ) . '">Arcos Multimedia Group</a>';
+		$info->homepage     = 'https://github.com/' . self::GITHUB_REPO;
 		$info->requires     = '6.0';
 		$info->tested       = '7.1';
 		$info->requires_php = '8.0';
+		if ( ! is_wp_error( $release ) && ! empty( $release['version'] ) ) {
+			if ( version_compare( $release['version'], self::VERSION, '>' ) ) {
+				$info->version       = $release['version'];
+				$info->download_link = $release['package'];
+			}
+			if ( ! empty( $release['published_at'] ) ) {
+				$info->last_updated = $release['published_at'];
+			}
+			if ( ! empty( $release['body'] ) && version_compare( $release['version'], self::VERSION, '>' ) ) {
+				$release_notes  = '<h4>' . esc_html( $release['version'] ) . ' (GitHub Release)</h4>';
+				$release_notes .= '<p>' . nl2br( esc_html( $release['body'] ) ) . '</p>';
+				$changelog_html = $release_notes . $changelog_html;
+			}
+		}
 		$info->sections     = [
 			'description' => '<p>Generate clean, rate-limit-free static HTML/CSS/JS/media ZIP exports or push directly to a same-server live directory, with incremental delta builds, Bricks + Bricksforge Pro Forms bridging, SEOPress SEO/GEO optimization, and client-side blog filtering.</p>',
 			'changelog'   => $changelog_html,
 		];
 		return $info;
+	}
+
+	private static function get_github_token() {
+		if ( defined( 'ARCOS_STATIC_SITES_GITHUB_TOKEN' ) && is_string( ARCOS_STATIC_SITES_GITHUB_TOKEN ) && '' !== trim( ARCOS_STATIC_SITES_GITHUB_TOKEN ) ) {
+			return trim( ARCOS_STATIC_SITES_GITHUB_TOKEN );
+		}
+		$settings = self::get_settings();
+		return isset( $settings['github_token'] ) ? trim( (string) $settings['github_token'] ) : '';
+	}
+
+	private static function fetch_latest_github_release( $force = false ) {
+		if ( ! $force ) {
+			$cached = get_transient( self::UPDATE_CACHE_KEY );
+			if ( is_array( $cached ) ) {
+				return $cached;
+			}
+		}
+
+		$token   = self::get_github_token();
+		$headers = [
+			'Accept'     => 'application/vnd.github+json',
+			'User-Agent' => 'WordPress/' . get_bloginfo( 'version' ) . '; ArcosStaticSites/' . self::VERSION,
+		];
+		if ( '' !== $token ) {
+			$headers['Authorization'] = 'Bearer ' . $token;
+		}
+
+		$api_url  = 'https://api.github.com/repos/' . self::GITHUB_REPO . '/releases/latest';
+		$response = wp_remote_get( $api_url, [
+			'timeout' => 15,
+			'headers' => $headers,
+		] );
+
+		if ( is_wp_error( $response ) ) {
+			return $response;
+		}
+
+		$code = (int) wp_remote_retrieve_response_code( $response );
+		if ( 200 !== $code ) {
+			$body = json_decode( wp_remote_retrieve_body( $response ), true );
+			$msg  = is_array( $body ) && ! empty( $body['message'] ) ? $body['message'] : ( 'HTTP ' . $code );
+			if ( 404 === $code && '' === $token ) {
+				$msg = 'Repository or release not found (private repo requires a GitHub Personal Access Token).';
+			}
+			return new WP_Error( 'arcos_gh_http_' . $code, $msg );
+		}
+
+		$data = json_decode( wp_remote_retrieve_body( $response ), true );
+		if ( ! is_array( $data ) || empty( $data['tag_name'] ) ) {
+			return new WP_Error( 'arcos_gh_invalid', 'Invalid GitHub release payload.' );
+		}
+
+		$version = ltrim( (string) $data['tag_name'], 'vV' );
+		$package = ! empty( $data['zipball_url'] ) ? (string) $data['zipball_url'] : '';
+
+		if ( ! empty( $data['assets'] ) && is_array( $data['assets'] ) ) {
+			foreach ( $data['assets'] as $asset ) {
+				if ( empty( $asset['name'] ) ) {
+					continue;
+				}
+				if ( 'arcos-static-sites.zip' === $asset['name'] || preg_match( '/^arcos-static-sites.*\.zip$/i', $asset['name'] ) ) {
+					// Use API asset URL so private repo downloads authenticate via Bearer + Accept: application/octet-stream.
+					$package = ! empty( $asset['url'] ) ? (string) $asset['url'] : (string) ( $asset['browser_download_url'] ?? $package );
+					break;
+				}
+			}
+		}
+
+		$release = [
+			'version'      => $version,
+			'tag_name'     => (string) $data['tag_name'],
+			'package'      => $package,
+			'html_url'     => ! empty( $data['html_url'] ) ? (string) $data['html_url'] : '',
+			'published_at' => ! empty( $data['published_at'] ) ? (string) $data['published_at'] : '',
+			'body'         => ! empty( $data['body'] ) ? (string) $data['body'] : '',
+		];
+
+		set_transient( self::UPDATE_CACHE_KEY, $release, 6 * HOUR_IN_SECONDS );
+		return $release;
+	}
+
+	public static function filter_update_plugins( $transient ) {
+		if ( ! is_object( $transient ) || empty( $transient->checked ) ) {
+			return $transient;
+		}
+
+		$release = self::fetch_latest_github_release();
+		if ( is_wp_error( $release ) || empty( $release['version'] ) || empty( $release['package'] ) ) {
+			return $transient;
+		}
+
+		$plugin_file = plugin_basename( __FILE__ );
+		$item        = (object) [
+			'id'           => 'https://github.com/' . self::GITHUB_REPO,
+			'slug'         => 'arcos-static-sites',
+			'plugin'       => $plugin_file,
+			'new_version'  => $release['version'],
+			'url'          => ! empty( $release['html_url'] ) ? $release['html_url'] : 'https://github.com/' . self::GITHUB_REPO,
+			'package'      => $release['package'],
+			'requires'     => '6.0',
+			'tested'       => '7.1',
+			'requires_php' => '8.0',
+		];
+
+		if ( version_compare( $release['version'], self::VERSION, '>' ) ) {
+			$transient->response[ $plugin_file ] = $item;
+			unset( $transient->no_update[ $plugin_file ] );
+		} else {
+			$transient->no_update[ $plugin_file ] = $item;
+			unset( $transient->response[ $plugin_file ] );
+		}
+
+		return $transient;
+	}
+
+	public static function filter_http_request_args( $args, $url ) {
+		$api_prefix = 'https://api.github.com/repos/' . self::GITHUB_REPO . '/';
+		if ( 0 !== strpos( (string) $url, $api_prefix ) ) {
+			return $args;
+		}
+
+		$token = self::get_github_token();
+		if ( ! isset( $args['headers'] ) || ! is_array( $args['headers'] ) ) {
+			$args['headers'] = [];
+		}
+		if ( '' !== $token ) {
+			$args['headers']['Authorization'] = 'Bearer ' . $token;
+		}
+		if ( false !== strpos( $url, '/releases/assets/' ) ) {
+			$args['headers']['Accept'] = 'application/octet-stream';
+		}
+		return $args;
+	}
+
+	public static function filter_upgrader_source_selection( $source, $remote_source, $upgrader, $hook_extra ) {
+		global $wp_filesystem;
+		$plugin_file = plugin_basename( __FILE__ );
+		$is_target   = ( isset( $hook_extra['plugin'] ) && $hook_extra['plugin'] === $plugin_file )
+			|| ( isset( $hook_extra['plugins'] ) && is_array( $hook_extra['plugins'] ) && in_array( $plugin_file, $hook_extra['plugins'], true ) );
+
+		if ( ! $is_target || ! $wp_filesystem ) {
+			return $source;
+		}
+
+		$source_norm = trailingslashit( $source );
+		// Handle GitHub source zipball where the plugin lives inside a nested arcos-static-sites/ folder.
+		if ( $wp_filesystem->exists( $source_norm . 'arcos-static-sites/arcos-static-sites.php' ) ) {
+			$source_norm = $source_norm . 'arcos-static-sites/';
+		}
+
+		$desired = trailingslashit( $remote_source ) . 'arcos-static-sites/';
+		if ( $source_norm !== $desired && $wp_filesystem->exists( $source_norm . 'arcos-static-sites.php' ) ) {
+			if ( $wp_filesystem->exists( $desired ) ) {
+				$wp_filesystem->delete( $desired, true );
+			}
+			if ( $wp_filesystem->move( $source_norm, $desired ) ) {
+				return $desired;
+			}
+		}
+
+		return $source_norm;
+	}
+
+	public static function on_upgrader_complete( $upgrader, $options ) {
+		if ( empty( $options['action'] ) || 'update' !== $options['action'] || empty( $options['type'] ) || 'plugin' !== $options['type'] ) {
+			return;
+		}
+		delete_transient( self::UPDATE_CACHE_KEY );
 	}
 
 	private static function parse_readme_changelog() {
@@ -151,6 +352,14 @@ class Arcos_Static_Sites {
 			'generate_htaccess'  => 0,
 			'ga4_id'             => '',
 			'private_cms_mode'   => 0,
+			'github_token'       => '',
+			'ftp_host'           => '',
+			'ftp_port'           => 21,
+			'ftp_user'           => '',
+			'ftp_pass'           => '',
+			'ftp_path'           => '/',
+			'ftp_ssl'            => 0,
+			'ftp_passive'        => 1,
 		];
 		$saved = get_option( self::OPT_KEY, [] );
 		return wp_parse_args( is_array( $saved ) ? $saved : [], $defaults );
@@ -627,6 +836,115 @@ class Arcos_Static_Sites {
 		return $real_target;
 	}
 
+	private static function get_environment_checks() {
+		$checks = [];
+
+		// 1. PHP Version
+		$php_ok   = version_compare( PHP_VERSION, '8.0.0', '>=' );
+		$checks[] = [
+			'label'   => 'PHP Version',
+			'current' => PHP_VERSION,
+			'target'  => '8.0+ (8.1+ recommended)',
+			'status'  => $php_ok ? 'ok' : 'fail',
+			'tip'     => $php_ok ? '' : 'Upgrade PHP to 8.0 or newer.',
+		];
+
+		// 2. PHP Memory Limit
+		$raw_mem   = (string) ini_get( 'memory_limit' );
+		$mem_bytes = ( '-1' === trim( $raw_mem ) ) ? -1 : wp_convert_hr_to_bytes( $raw_mem );
+		if ( -1 === $mem_bytes || $mem_bytes >= 512 * MB_IN_BYTES ) {
+			$mem_status = 'ok';
+			$mem_tip    = '';
+		} elseif ( $mem_bytes >= 256 * MB_IN_BYTES ) {
+			$mem_status = 'warn';
+			$mem_tip    = '512M recommended for large Bricks + media sites.';
+		} else {
+			$mem_status = 'fail';
+			$mem_tip    = 'Increase memory_limit to 512M (256M minimum) to prevent fatal errors during batch export or ZIP packaging.';
+		}
+		$checks[] = [
+			'label'   => 'PHP memory_limit',
+			'current' => '' !== $raw_mem ? $raw_mem : 'Unknown',
+			'target'  => '512M (256M min)',
+			'status'  => $mem_status,
+			'tip'     => $mem_tip,
+		];
+
+		// 3. Max Execution Time
+		$max_exec = (int) ini_get( 'max_execution_time' );
+		if ( 0 === $max_exec || $max_exec >= 120 ) {
+			$exec_status = 'ok';
+			$exec_tip    = '';
+		} elseif ( $max_exec >= 60 ) {
+			$exec_status = 'warn';
+			$exec_tip    = '120s–300s recommended (or lower Pages per Batch to 2).';
+		} else {
+			$exec_status = 'fail';
+			$exec_tip    = 'Increase max_execution_time to 120–300s to avoid batch timeouts.';
+		}
+		$checks[] = [
+			'label'   => 'PHP max_execution_time',
+			'current' => 0 === $max_exec ? 'Unlimited (0)' : $max_exec . 's',
+			'target'  => '120s–300s',
+			'status'  => $exec_status,
+			'tip'     => $exec_tip,
+		];
+
+		// 4. Max Input Vars
+		$input_vars = (int) ini_get( 'max_input_vars' );
+		$vars_ok    = ( $input_vars >= 3000 );
+		$checks[]   = [
+			'label'   => 'PHP max_input_vars',
+			'current' => (string) $input_vars,
+			'target'  => '3000–5000',
+			'status'  => $vars_ok ? 'ok' : 'warn',
+			'tip'     => $vars_ok ? '' : 'Increase to 5000 for Bricks Builder & large Selected Pages lists.',
+		];
+
+		// 5. ZipArchive
+		$zip_ok   = class_exists( 'ZipArchive' );
+		$checks[] = [
+			'label'   => 'PHP ZipArchive Extension',
+			'current' => $zip_ok ? 'Enabled' : 'Missing',
+			'target'  => 'Enabled',
+			'status'  => $zip_ok ? 'ok' : 'fail',
+			'tip'     => $zip_ok ? '' : 'Enable php-zip extension to generate .zip archives and rollbacks.',
+		];
+
+		// 6. Export Storage Writable
+		$storage_dir = self::get_base_storage_dir();
+		$writable    = wp_is_writable( $storage_dir ) || wp_is_writable( dirname( $storage_dir ) );
+		$checks[]    = [
+			'label'   => 'Export Storage Directory',
+			'current' => $writable ? 'Writable' : 'Not writable',
+			'target'  => 'Writable (0755)',
+			'status'  => $writable ? 'ok' : 'fail',
+			'tip'     => $writable ? '' : 'Ensure wp-content/uploads/arcos-static-sites/ is writable.',
+		];
+
+		// 7. zlib.output_compression
+		$zlib_on  = filter_var( ini_get( 'zlib.output_compression' ), FILTER_VALIDATE_BOOLEAN );
+		$checks[] = [
+			'label'   => 'zlib.output_compression',
+			'current' => $zlib_on ? 'Enabled' : 'Off',
+			'target'  => 'Off',
+			'status'  => $zlib_on ? 'warn' : 'ok',
+			'tip'     => $zlib_on ? 'Disable PHP zlib.output_compression; let Apache/LiteSpeed/Nginx handle Gzip.' : '',
+		];
+
+		// 8. PHP FTP Extension
+		$ftp_ok   = extension_loaded( 'ftp' );
+		$checks[] = [
+			'label'   => 'PHP FTP Extension',
+			'current' => $ftp_ok ? 'Enabled' : 'Missing',
+			'target'  => 'Enabled (for FTP/FTPS)',
+			'status'  => $ftp_ok ? 'ok' : 'warn',
+			'tip'     => $ftp_ok ? '' : 'Enable php-ftp extension if you want to use FTP / FTPS delivery.',
+		];
+
+		return $checks;
+	}
+
 	public static function render_admin_page() {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			return;
@@ -675,6 +993,61 @@ class Arcos_Static_Sites {
 					<button type="button" id="arcos-reset-manifest" class="button button-small">Reset Manifest</button>
 				<?php endif; ?>
 			</div>
+
+			<?php
+			$env_checks = self::get_environment_checks();
+			$env_fails  = 0;
+			$env_warns  = 0;
+			foreach ( $env_checks as $c ) {
+				if ( 'fail' === $c['status'] ) {
+					$env_fails++;
+				} elseif ( 'warn' === $c['status'] ) {
+					$env_warns++;
+				}
+			}
+			$env_ok_count = count( $env_checks ) - $env_fails - $env_warns;
+			$env_badge_bg = $env_fails > 0 ? '#fee2e2' : ( $env_warns > 0 ? '#fef3c7' : '#dcfce7' );
+			$env_badge_fg = $env_fails > 0 ? '#991b1b' : ( $env_warns > 0 ? '#92400e' : '#166534' );
+			$env_summary  = $env_fails > 0
+				? $env_fails . ' Action Needed' . ( $env_warns > 0 ? ', ' . $env_warns . ' Warning' : '' )
+				: ( $env_warns > 0 ? $env_warns . ' Recommended Tweak' . ( $env_warns > 1 ? 's' : '' ) : 'All ' . $env_ok_count . ' Checks Passed' );
+			?>
+			<details style="background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:12px 18px;margin-top:12px;" <?php echo $env_fails > 0 ? 'open' : ''; ?>>
+				<summary style="cursor:pointer;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:10px;list-style:none;">
+					<span>Server &amp; PHP Readiness Checklist</span>
+					<span style="font-size:12px;padding:2px 10px;border-radius:999px;background:<?php echo esc_attr( $env_badge_bg ); ?>;color:<?php echo esc_attr( $env_badge_fg ); ?>;">
+						<?php echo esc_html( $env_summary ); ?>
+					</span>
+				</summary>
+				<table class="widefat striped" style="margin-top:12px;">
+					<thead>
+						<tr>
+							<th>Check</th>
+							<th>Current</th>
+							<th>Recommended</th>
+							<th>Status</th>
+						</tr>
+					</thead>
+					<tbody>
+						<?php foreach ( $env_checks as $c ) :
+							$st_color = 'ok' === $c['status'] ? '#15803d' : ( 'warn' === $c['status'] ? '#b45309' : '#b91c1c' );
+							$st_label = 'ok' === $c['status'] ? '✓ OK' : ( 'warn' === $c['status'] ? '⚠ Tweak' : '✕ Action Needed' );
+						?>
+							<tr>
+								<td><strong><?php echo esc_html( $c['label'] ); ?></strong></td>
+								<td><code><?php echo esc_html( $c['current'] ); ?></code></td>
+								<td><?php echo esc_html( $c['target'] ); ?></td>
+								<td>
+									<strong style="color:<?php echo esc_attr( $st_color ); ?>;"><?php echo esc_html( $st_label ); ?></strong>
+									<?php if ( '' !== $c['tip'] ) : ?>
+										<div style="font-size:12px;color:#475569;margin-top:2px;"><?php echo esc_html( $c['tip'] ); ?></div>
+									<?php endif; ?>
+								</td>
+							</tr>
+						<?php endforeach; ?>
+					</tbody>
+				</table>
+			</details>
 
 			<div style="background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:20px 24px;margin-top:16px;">
 				<h2 style="margin-top:0;">Export Settings</h2>
@@ -735,12 +1108,20 @@ class Arcos_Static_Sites {
 								<input type="radio" name="arcos_delivery" value="push" <?php checked( $settings['delivery_method'], 'push' ); ?> />
 								<strong>Push Directly to Server Folder</strong> — Copy files straight into the live static directory on this server (no ZIP download/unzip needed)
 							</label>
-							<label style="display:block;margin-bottom:8px;">
+							<label style="display:block;margin-bottom:6px;">
 								<input type="radio" name="arcos_delivery" value="both" <?php checked( $settings['delivery_method'], 'both' ); ?> />
 								<strong>Both</strong> — Push directly to server folder AND keep a downloadable <code>.zip</code> backup
 							</label>
+							<label style="display:block;margin-bottom:6px;">
+								<input type="radio" name="arcos_delivery" value="ftp" <?php checked( $settings['delivery_method'], 'ftp' ); ?> />
+								<strong>Push via FTP / FTPS</strong> — Upload static files directly to a remote FTP/FTPS server
+							</label>
+							<label style="display:block;margin-bottom:8px;">
+								<input type="radio" name="arcos_delivery" value="zip_ftp" <?php checked( $settings['delivery_method'], 'zip_ftp' ); ?> />
+								<strong>Both (ZIP + FTP / FTPS)</strong> — Save a downloadable <code>.zip</code> backup AND upload via FTP/FTPS
+							</label>
 
-							<div id="arcos-target-dir-wrap" style="<?php echo ( 'zip' === $settings['delivery_method'] ) ? 'display:none;' : ''; ?>margin-top:10px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;">
+							<div id="arcos-target-dir-wrap" style="<?php echo in_array( $settings['delivery_method'], [ 'push', 'both' ], true ) ? '' : 'display:none;'; ?>margin-top:10px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;">
 								<label for="arcos-dir-select"><strong>Detected Server Folders:</strong></label><br />
 								<select id="arcos-dir-select" class="regular-text" style="margin-top:4px;max-width:100%;width:100%;">
 									<option value="">— Select a detected folder or enter custom path below —</option>
@@ -758,6 +1139,41 @@ class Arcos_Static_Sites {
 									<span id="arcos-dir-status" style="margin-left:8px;font-weight:600;"></span>
 								</p>
 								<p class="description">Current WordPress path: <code><?php echo esc_html( untrailingslashit( ABSPATH ) ); ?></code>. Pick a detected folder above or type a custom path.</p>
+							</div>
+
+							<div id="arcos-ftp-wrap" style="<?php echo in_array( $settings['delivery_method'], [ 'ftp', 'zip_ftp' ], true ) ? '' : 'display:none;'; ?>margin-top:10px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;">
+								<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:8px;">
+									<div>
+										<label for="arcos-ftp-host"><strong>FTP Host:</strong></label><br />
+										<input type="text" id="arcos-ftp-host" value="<?php echo esc_attr( $settings['ftp_host'] ); ?>" class="regular-text" style="width:100%;margin-top:4px;" placeholder="e.g. ftp.example.com" />
+									</div>
+									<div>
+										<label for="arcos-ftp-port"><strong>Port:</strong></label><br />
+										<input type="number" id="arcos-ftp-port" value="<?php echo esc_attr( (string) $settings['ftp_port'] ); ?>" min="1" max="65535" style="width:100%;margin-top:4px;" />
+									</div>
+								</div>
+								<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
+									<div>
+										<label for="arcos-ftp-user"><strong>Username:</strong></label><br />
+										<input type="text" id="arcos-ftp-user" value="<?php echo esc_attr( $settings['ftp_user'] ); ?>" class="regular-text" style="width:100%;margin-top:4px;" autocomplete="off" />
+									</div>
+									<div>
+										<label for="arcos-ftp-pass"><strong>Password:</strong></label><br />
+										<input type="password" id="arcos-ftp-pass" value="" class="regular-text" style="width:100%;margin-top:4px;" autocomplete="new-password" placeholder="<?php echo ! empty( $settings['ftp_pass'] ) ? '•••••••• (saved — leave blank to keep)' : 'FTP password'; ?>" />
+									</div>
+								</div>
+								<div style="margin-bottom:8px;">
+									<label for="arcos-ftp-path"><strong>Remote Directory Path:</strong></label><br />
+									<input type="text" id="arcos-ftp-path" value="<?php echo esc_attr( $settings['ftp_path'] ); ?>" class="large-text" style="margin-top:4px;" placeholder="e.g. /public_html/" />
+								</div>
+								<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;">
+									<label><input type="checkbox" id="arcos-ftp-ssl" <?php checked( ! empty( $settings['ftp_ssl'] ) ); ?> /> Use FTPS (SSL/TLS)</label>
+									<label><input type="checkbox" id="arcos-ftp-passive" <?php checked( ! empty( $settings['ftp_passive'] ) ); ?> /> Passive Mode (PASV, recommended)</label>
+								</div>
+								<p style="margin:8px 0 0;">
+									<button type="button" id="arcos-test-ftp-btn" class="button button-secondary button-small">Test FTP Connection</button>
+									<span id="arcos-ftp-status" style="margin-left:8px;font-weight:600;"></span>
+								</p>
 							</div>
 						</td>
 					</tr>
@@ -838,10 +1254,36 @@ class Arcos_Static_Sites {
 							<span id="arcos-lock-status" style="font-size:12px;font-weight:600;color:#475569;"></span>
 						</td>
 					</tr>
+					<tr>
+						<th scope="row">GitHub Plugin Updates</th>
+						<td>
+							<?php
+							$has_const_token = defined( 'ARCOS_STATIC_SITES_GITHUB_TOKEN' ) && is_string( ARCOS_STATIC_SITES_GITHUB_TOKEN ) && '' !== trim( ARCOS_STATIC_SITES_GITHUB_TOKEN );
+							$has_saved_token = ! empty( $settings['github_token'] );
+							?>
+							<?php if ( $has_const_token ) : ?>
+								<p class="description" style="margin-bottom:8px;">Authenticated via <code>ARCOS_STATIC_SITES_GITHUB_TOKEN</code> in <code>wp-config.php</code>.</p>
+							<?php else : ?>
+								<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
+									<input type="password" id="arcos-github-token" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo $has_saved_token ? '•••••••••••••••• (token saved — enter new to replace)' : 'github_pat_... (fine-grained token with Contents: Read)'; ?>" />
+									<button type="button" id="arcos-save-token" class="button">Save Token</button>
+									<?php if ( $has_saved_token ) : ?>
+										<button type="button" id="arcos-clear-token" class="button">Clear</button>
+									<?php endif; ?>
+								</div>
+								<p class="description" style="margin-bottom:8px;">Private repo: <code><?php echo esc_html( self::GITHUB_REPO ); ?></code>. Create a fine-grained GitHub PAT with <strong>Contents: Read-only</strong> access to this repository.</p>
+							<?php endif; ?>
+							<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+								<button type="button" id="arcos-check-updates" class="button">Check for Updates Now</button>
+								<span id="arcos-update-status" style="font-size:12px;font-weight:600;color:#475569;"></span>
+							</div>
+						</td>
+					</tr>
 				</table>
 
 				<p style="margin-top:16px;">
 					<button type="button" id="arcos-start-btn" class="button button-primary button-hero">Run Static Export</button>
+					<button type="button" id="arcos-cancel-btn" class="button button-secondary button-hero" style="display:none;margin-left:8px;">Cancel Export</button>
 				</p>
 
 				<div id="arcos-progress-wrap" style="display:none;margin-top:18px;">
@@ -896,6 +1338,83 @@ class Arcos_Static_Sites {
 					</tbody>
 				</table>
 			</div>
+
+			<?php
+			$export_logs = self::get_export_logs();
+			$logs_dir    = self::get_logs_dir();
+			?>
+			<div style="background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:20px 24px;margin-top:20px;">
+				<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
+					<h2 style="margin:0;">Export Logs</h2>
+					<?php if ( ! empty( $export_logs ) ) : ?>
+						<button type="button" id="arcos-clear-logs" class="button button-small">Clear All Logs</button>
+					<?php endif; ?>
+				</div>
+				<table class="widefat striped" id="arcos-logs-table">
+					<thead>
+						<tr>
+							<th>Date (UTC)</th>
+							<th>Mode / Delivery</th>
+							<th>Label</th>
+							<th>Pages</th>
+							<th>Status</th>
+							<th>Size</th>
+							<th>Actions</th>
+						</tr>
+					</thead>
+					<tbody>
+						<?php if ( empty( $export_logs ) ) : ?>
+							<tr><td colspan="7">No export logs recorded yet.</td></tr>
+						<?php else : ?>
+							<?php foreach ( $export_logs as $lg ) :
+								$lid      = (string) ( $lg['id'] ?? '' );
+								$lfile    = $logs_dir . '/export-' . sanitize_file_name( $lid ) . '.log';
+								$lsize    = file_exists( $lfile ) ? size_format( filesize( $lfile ), 1 ) : '—';
+								$lstatus  = (string) ( $lg['status'] ?? 'running' );
+								$st_bg    = 'completed' === $lstatus ? '#dcfce7' : ( 'failed' === $lstatus ? '#fee2e2' : ( 'cancelled' === $lstatus ? '#fef3c7' : ( 'no_changes' === $lstatus ? '#f1f5f9' : '#dbeafe' ) ) );
+								$st_fg    = 'completed' === $lstatus ? '#166534' : ( 'failed' === $lstatus ? '#991b1b' : ( 'cancelled' === $lstatus ? '#92400e' : ( 'no_changes' === $lstatus ? '#475569' : '#1e40af' ) ) );
+								$dl_url   = add_query_arg( [
+									'action' => 'arcos_ss_download_log',
+									'nonce'  => $nonce,
+									'id'     => $lid,
+								], admin_url( 'admin-ajax.php' ) );
+								?>
+								<tr data-log-id="<?php echo esc_attr( $lid ); ?>">
+									<td><?php echo esc_html( $lg['created_at'] ?? '' ); ?></td>
+									<td><code><?php echo esc_html( ( $lg['mode'] ?? '' ) . ' / ' . ( $lg['delivery'] ?? '' ) ); ?></code></td>
+									<td><?php echo ! empty( $lg['label'] ) ? esc_html( $lg['label'] ) : '<em style="color:#94a3b8;">—</em>'; ?></td>
+									<td><?php echo esc_html( (string) ( $lg['total'] ?? 0 ) ); ?></td>
+									<td>
+										<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;background:<?php echo esc_attr( $st_bg ); ?>;color:<?php echo esc_attr( $st_fg ); ?>;">
+											<?php echo esc_html( ucwords( str_replace( '_', ' ', $lstatus ) ) ); ?>
+										</span>
+									</td>
+									<td><?php echo esc_html( $lsize ); ?></td>
+									<td>
+										<button type="button" class="button button-secondary button-small arcos-view-log" data-id="<?php echo esc_attr( $lid ); ?>">View</button>
+										<a href="<?php echo esc_url( $dl_url ); ?>" class="button button-small">Download</a>
+										<button type="button" class="button button-small arcos-del-log" data-id="<?php echo esc_attr( $lid ); ?>">Delete</button>
+									</td>
+								</tr>
+							<?php endforeach; ?>
+						<?php endif; ?>
+					</tbody>
+				</table>
+			</div>
+
+			<div id="arcos-log-modal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.65);z-index:100100;align-items:center;justify-content:center;padding:24px;">
+				<div style="background:#fff;border-radius:10px;max-width:860px;width:100%;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 50px rgba(0,0,0,0.3);">
+					<div style="padding:14px 18px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+						<strong id="arcos-log-modal-title" style="font-size:14px;">Export Log</strong>
+						<div style="display:flex;gap:8px;align-items:center;">
+							<button type="button" id="arcos-log-modal-copy" class="button button-small">Copy</button>
+							<a href="#" id="arcos-log-modal-dl" class="button button-small">Download</a>
+							<button type="button" id="arcos-log-modal-close" class="button button-small">Close</button>
+						</div>
+					</div>
+					<pre id="arcos-log-modal-body" style="margin:0;padding:16px 18px;background:#0f172a;color:#e2e8f0;font-size:12px;line-height:1.5;overflow:auto;flex:1;border-radius:0 0 10px 10px;white-space:pre-wrap;word-break:break-word;"></pre>
+				</div>
+			</div>
 		</div>
 
 		<script>
@@ -903,12 +1422,14 @@ class Arcos_Static_Sites {
 			const ajaxUrl   = <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>;
 			const nonce     = <?php echo wp_json_encode( $nonce ); ?>;
 			const startBtn  = document.getElementById('arcos-start-btn');
+			const cancelBtn = document.getElementById('arcos-cancel-btn');
 			const wrap      = document.getElementById('arcos-progress-wrap');
 			const bar       = document.getElementById('arcos-progress-bar');
 			const statusEl  = document.getElementById('arcos-status-text');
 			const logEl     = document.getElementById('arcos-log');
 			const selWrap   = document.getElementById('arcos-selected-wrap');
 			const dirWrap   = document.getElementById('arcos-target-dir-wrap');
+			const ftpWrap   = document.getElementById('arcos-ftp-wrap');
 			const dirSelect = document.getElementById('arcos-dir-select');
 			const dirInput  = document.getElementById('arcos-target-dir');
 			const checkBtn  = document.getElementById('arcos-check-dir-btn');
@@ -958,7 +1479,8 @@ class Arcos_Static_Sites {
 			document.querySelectorAll('input[name="arcos_delivery"]').forEach(r => {
 				r.addEventListener('change', () => {
 					const val = document.querySelector('input[name="arcos_delivery"]:checked').value;
-					dirWrap.style.display = (val === 'zip') ? 'none' : 'block';
+					dirWrap.style.display = (val === 'push' || val === 'both') ? 'block' : 'none';
+					if (ftpWrap) ftpWrap.style.display = (val === 'ftp' || val === 'zip_ftp') ? 'block' : 'none';
 				});
 			});
 
@@ -967,7 +1489,7 @@ class Arcos_Static_Sites {
 				logEl.scrollTop = logEl.scrollHeight;
 			}
 
-			async function postAction(action, data) {
+			async function postAction(action, data, signal) {
 				const form = new FormData();
 				form.append('action', action);
 				form.append('nonce', nonce);
@@ -978,8 +1500,28 @@ class Arcos_Static_Sites {
 						form.append(k, v);
 					}
 				}
-				const res = await fetch(ajaxUrl, { method: 'POST', body: form });
-				return await res.json();
+				const fetchOpts = { method: 'POST', body: form };
+				if (signal) fetchOpts.signal = signal;
+				let res;
+				try {
+					res = await fetch(ajaxUrl, fetchOpts);
+				} catch (netErr) {
+					if (netErr && netErr.name === 'AbortError') throw netErr;
+					throw new Error(action + ' network error: ' + (netErr && netErr.message ? netErr.message : 'Failed to fetch'));
+				}
+				const raw = await res.text();
+				try {
+					return JSON.parse(raw);
+				} catch (parseErr) {
+					const clean = raw
+						.replace(/<style[\s\S]*?<\/style>/gi, ' ')
+						.replace(/<script[\s\S]*?<\/script>/gi, ' ')
+						.replace(/<[^>]+>/g, ' ')
+						.replace(/\s+/g, ' ')
+						.trim()
+						.slice(0, 300);
+					throw new Error(action + ' returned non-JSON (HTTP ' + res.status + '): ' + (clean || '[empty response]'));
+				}
 			}
 
 			checkBtn.addEventListener('click', async function() {
@@ -996,6 +1538,36 @@ class Arcos_Static_Sites {
 					dirStatus.style.color = '#b91c1c';
 				}
 			});
+
+			const testFtpBtn = document.getElementById('arcos-test-ftp-btn');
+			const ftpStatus  = document.getElementById('arcos-ftp-status');
+			if (testFtpBtn) {
+				testFtpBtn.addEventListener('click', async function() {
+					ftpStatus.textContent = 'Connecting...';
+					ftpStatus.style.color = '#475569';
+					try {
+						const res = await postAction('arcos_ss_test_ftp', {
+							ftp_host: document.getElementById('arcos-ftp-host').value.trim(),
+							ftp_port: document.getElementById('arcos-ftp-port').value.trim() || '21',
+							ftp_user: document.getElementById('arcos-ftp-user').value.trim(),
+							ftp_pass: document.getElementById('arcos-ftp-pass').value,
+							ftp_path: document.getElementById('arcos-ftp-path').value.trim() || '/',
+							ftp_ssl: document.getElementById('arcos-ftp-ssl').checked ? '1' : '0',
+							ftp_passive: document.getElementById('arcos-ftp-passive').checked ? '1' : '0'
+						});
+						if (res.success) {
+							ftpStatus.textContent = 'OK: ' + (res.data.message || 'Connected');
+							ftpStatus.style.color = '#15803d';
+						} else {
+							ftpStatus.textContent = res.data || 'Connection failed';
+							ftpStatus.style.color = '#b91c1c';
+						}
+					} catch (e) {
+						ftpStatus.textContent = e.message || 'Connection failed';
+						ftpStatus.style.color = '#b91c1c';
+					}
+				});
+			}
 
 			startBtn.addEventListener('click', async function() {
 				const pts = Array.from(document.querySelectorAll('.arcos-pt:checked')).map(el => el.value);
@@ -1019,6 +1591,21 @@ class Arcos_Static_Sites {
 
 				window.onbeforeunload = function() { return 'Static export is still running. Leaving now will cancel it.'; };
 				startBtn.disabled = true;
+				let exportCancelled = false;
+				let activeLogId = '';
+				const abortCtrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+				if (cancelBtn) {
+					cancelBtn.style.display = 'inline-block';
+					cancelBtn.disabled = false;
+					cancelBtn.textContent = 'Cancel Export';
+					cancelBtn.onclick = function() {
+						exportCancelled = true;
+						cancelBtn.disabled = true;
+						cancelBtn.textContent = 'Cancelling...';
+						statusEl.textContent = 'Cancelling export...';
+						if (abortCtrl) abortCtrl.abort();
+					};
+				}
 				wrap.style.display = 'block';
 				logEl.textContent = '';
 				bar.style.width = '5%';
@@ -1041,10 +1628,18 @@ class Arcos_Static_Sites {
 						pagespeed_off: pagespeedOff,
 						batch_size: batchSize,
 						form_bridge: formBridge,
-						allowed_origins: allowedOrigins
-					});
+						allowed_origins: allowedOrigins,
+						ftp_host: document.getElementById('arcos-ftp-host') ? document.getElementById('arcos-ftp-host').value.trim() : '',
+						ftp_port: document.getElementById('arcos-ftp-port') ? (document.getElementById('arcos-ftp-port').value.trim() || '21') : '21',
+						ftp_user: document.getElementById('arcos-ftp-user') ? document.getElementById('arcos-ftp-user').value.trim() : '',
+						ftp_pass: document.getElementById('arcos-ftp-pass') ? document.getElementById('arcos-ftp-pass').value : '',
+						ftp_path: document.getElementById('arcos-ftp-path') ? (document.getElementById('arcos-ftp-path').value.trim() || '/') : '/',
+						ftp_ssl: document.getElementById('arcos-ftp-ssl') && document.getElementById('arcos-ftp-ssl').checked ? '1' : '0',
+						ftp_passive: document.getElementById('arcos-ftp-passive') && document.getElementById('arcos-ftp-passive').checked ? '1' : '0'
+					}, abortCtrl ? abortCtrl.signal : undefined);
 					if (!initRes.success) throw new Error(initRes.data || 'Init failed');
 
+					activeLogId = initRes.data.log_id || '';
 					const total = initRes.data.total;
 					if (initRes.data.note) log(initRes.data.note);
 
@@ -1059,16 +1654,34 @@ class Arcos_Static_Sites {
 					log('Queued ' + total + ' URL(s) [' + mode + ' mode, delivery=' + delivery + ', batch=' + batchSize + '].');
 
 					for (let offset = 0; offset < total; offset += batchSize) {
+						if (exportCancelled) break;
 						statusEl.textContent = 'Exporting pages ' + (offset + 1) + '–' + Math.min(offset + batchSize, total) + ' of ' + total + '...';
-						const bRes = await postAction('arcos_ss_batch', { offset, limit: batchSize });
+						let bRes;
+						try {
+							bRes = await postAction('arcos_ss_batch', { offset, limit: batchSize }, abortCtrl ? abortCtrl.signal : undefined);
+						} catch (batchErr) {
+							if (exportCancelled || (batchErr && batchErr.name === 'AbortError')) throw batchErr;
+							log('Batch ' + (offset + 1) + ' transient error (' + batchErr.message + '), retrying once...');
+							await new Promise(r => setTimeout(r, 2000));
+							bRes = await postAction('arcos_ss_batch', { offset, limit: batchSize }, abortCtrl ? abortCtrl.signal : undefined);
+						}
 						if (!bRes.success) throw new Error(bRes.data || 'Batch failed');
 						bRes.data.logs.forEach(l => log(l));
 						const pct = Math.min(90, Math.round(((offset + batchSize) / total) * 85) + 5);
 						bar.style.width = pct + '%';
 					}
 
+					if (exportCancelled) {
+						statusEl.textContent = 'Export cancelled.';
+						log('CANCELLED: Export stopped by user.');
+						try {
+							await postAction('arcos_ss_cancel', { log_id: activeLogId });
+						} catch (_) {}
+						return;
+					}
+
 					statusEl.textContent = 'Finalizing delivery...';
-					const finRes = await postAction('arcos_ss_zip', {});
+					const finRes = await postAction('arcos_ss_zip', {}, abortCtrl ? abortCtrl.signal : undefined);
 					if (!finRes.success) throw new Error(finRes.data || 'Finalize failed');
 
 					bar.style.width = '100%';
@@ -1077,17 +1690,38 @@ class Arcos_Static_Sites {
 						summaryHtml += 'Pushed ' + finRes.data.pushed_files + ' file(s) to live folder. ';
 						log('Pushed ' + finRes.data.pushed_files + ' file(s) to ' + finRes.data.target_dir);
 					}
+					if (finRes.data.ftp_files) {
+						summaryHtml += 'Uploaded ' + finRes.data.ftp_files + ' file(s) via FTP. ';
+						log('Uploaded ' + finRes.data.ftp_files + ' file(s) via FTP to ' + finRes.data.ftp_dest);
+					}
 					if (finRes.data.url) {
 						summaryHtml += '<a href="' + finRes.data.url + '" class="button button-primary" download>Download ' + finRes.data.filename + ' (' + finRes.data.size + ')</a>';
 						log('Archive created: ' + finRes.data.filename + ' (' + finRes.data.files + ' files, ' + finRes.data.size + ')');
 					}
 					statusEl.innerHTML = summaryHtml;
 				} catch (err) {
-					statusEl.textContent = 'Error: ' + err.message;
-					log('ERROR: ' + err.message);
+					if (exportCancelled || (err && err.name === 'AbortError')) {
+						statusEl.textContent = 'Export cancelled.';
+						log('CANCELLED: Export stopped by user.');
+						try {
+							await postAction('arcos_ss_cancel', { log_id: activeLogId });
+						} catch (_) {}
+					} else {
+						statusEl.textContent = 'Error: ' + err.message;
+						log('ERROR: ' + err.message);
+						if (activeLogId) {
+							try {
+								await postAction('arcos_ss_log_error', { log_id: activeLogId, error: err.message });
+							} catch (_) {}
+						}
+					}
 				} finally {
 					window.onbeforeunload = null;
 					startBtn.disabled = false;
+					if (cancelBtn) {
+						cancelBtn.style.display = 'none';
+						cancelBtn.onclick = null;
+					}
 				}
 			});
 
@@ -1160,6 +1794,134 @@ class Arcos_Static_Sites {
 					}
 				});
 			}
+
+			const ghTokenInput = document.getElementById('arcos-github-token');
+			const saveTokenBtn = document.getElementById('arcos-save-token');
+			const clearTokenBtn = document.getElementById('arcos-clear-token');
+			const checkUpdBtn  = document.getElementById('arcos-check-updates');
+			const updStatus    = document.getElementById('arcos-update-status');
+
+			if (saveTokenBtn && ghTokenInput) {
+				saveTokenBtn.addEventListener('click', async function() {
+					const token = ghTokenInput.value.trim();
+					if (!token) {
+						updStatus.textContent = 'Please enter a GitHub token first.';
+						updStatus.style.color = '#b91c1c';
+						return;
+					}
+					updStatus.textContent = 'Saving token...';
+					updStatus.style.color = '#475569';
+					const res = await postAction('arcos_ss_save_github_token', { token });
+					if (res.success) {
+						ghTokenInput.value = '';
+						ghTokenInput.placeholder = '•••••••••••••••• (token saved — enter new to replace)';
+						updStatus.textContent = 'GitHub token saved.';
+						updStatus.style.color = '#15803d';
+					} else {
+						updStatus.textContent = (res.data || 'Failed to save token.');
+						updStatus.style.color = '#b91c1c';
+					}
+				});
+			}
+
+			if (clearTokenBtn) {
+				clearTokenBtn.addEventListener('click', async function() {
+					updStatus.textContent = 'Clearing token...';
+					const res = await postAction('arcos_ss_save_github_token', { clear: '1' });
+					if (res.success) {
+						if (ghTokenInput) {
+							ghTokenInput.value = '';
+							ghTokenInput.placeholder = 'github_pat_... (fine-grained token with Contents: Read)';
+						}
+						clearTokenBtn.remove();
+						updStatus.textContent = 'GitHub token cleared.';
+						updStatus.style.color = '#475569';
+					}
+				});
+			}
+
+			if (checkUpdBtn) {
+				checkUpdBtn.addEventListener('click', async function() {
+					const orig = checkUpdBtn.textContent;
+					checkUpdBtn.disabled = true;
+					checkUpdBtn.textContent = 'Checking...';
+					updStatus.textContent = '';
+					const res = await postAction('arcos_ss_check_updates', {});
+					checkUpdBtn.disabled = false;
+					checkUpdBtn.textContent = orig;
+					if (res.success && res.data) {
+						updStatus.innerHTML = res.data.message_html || '';
+						updStatus.style.color = res.data.has_update ? '#1d4ed8' : '#15803d';
+					} else {
+						updStatus.textContent = (res.data || 'Update check failed.');
+						updStatus.style.color = '#b91c1c';
+					}
+				});
+			}
+
+			const logModal      = document.getElementById('arcos-log-modal');
+			const logModalTitle = document.getElementById('arcos-log-modal-title');
+			const logModalBody  = document.getElementById('arcos-log-modal-body');
+			const logModalDl    = document.getElementById('arcos-log-modal-dl');
+			const logModalCopy  = document.getElementById('arcos-log-modal-copy');
+			const logModalClose = document.getElementById('arcos-log-modal-close');
+
+			if (logModalClose) {
+				logModalClose.addEventListener('click', () => { logModal.style.display = 'none'; });
+				logModal.addEventListener('click', (e) => { if (e.target === logModal) logModal.style.display = 'none'; });
+			}
+			if (logModalCopy) {
+				logModalCopy.addEventListener('click', async () => {
+					try {
+						await navigator.clipboard.writeText(logModalBody.textContent || '');
+						const orig = logModalCopy.textContent;
+						logModalCopy.textContent = 'Copied!';
+						setTimeout(() => { logModalCopy.textContent = orig; }, 1200);
+					} catch (_) {}
+				});
+			}
+
+			document.querySelectorAll('.arcos-view-log').forEach(btn => {
+				btn.addEventListener('click', async function() {
+					const id = this.dataset.id;
+					const orig = this.textContent;
+					this.disabled = true;
+					this.textContent = 'Loading...';
+					try {
+						const res = await postAction('arcos_ss_get_log', { id });
+						if (res.success && res.data) {
+							logModalTitle.textContent = 'Export Log — ' + id;
+							logModalBody.textContent = res.data.content || '(empty log)';
+							logModalDl.href = ajaxUrl + '?action=arcos_ss_download_log&nonce=' + encodeURIComponent(nonce) + '&id=' + encodeURIComponent(id);
+							logModal.style.display = 'flex';
+						} else {
+							alert(res.data || 'Could not load log.');
+						}
+					} catch (e) {
+						alert(e.message || 'Could not load log.');
+					} finally {
+						this.disabled = false;
+						this.textContent = orig;
+					}
+				});
+			});
+
+			document.querySelectorAll('.arcos-del-log').forEach(btn => {
+				btn.addEventListener('click', async function() {
+					if (!confirm('Delete this export log?')) return;
+					const res = await postAction('arcos_ss_delete_log', { id: this.dataset.id });
+					if (res.success) location.reload();
+				});
+			});
+
+			const clearLogsBtn = document.getElementById('arcos-clear-logs');
+			if (clearLogsBtn) {
+				clearLogsBtn.addEventListener('click', async function() {
+					if (!confirm('Delete ALL saved export logs?')) return;
+					const res = await postAction('arcos_ss_clear_logs', {});
+					if (res.success) location.reload();
+				});
+			}
 		})();
 		</script>
 		<?php
@@ -1187,6 +1949,65 @@ class Arcos_Static_Sites {
 		$settings['private_cms_mode'] = ( isset( $_POST['private_cms'] ) && '1' === $_POST['private_cms'] ) ? 1 : 0;
 		update_option( self::OPT_KEY, $settings );
 		wp_send_json_success();
+	}
+
+	public static function ajax_save_github_token() {
+		check_ajax_referer( self::NONCE_ACTION, 'nonce' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( 'Unauthorized' );
+		}
+		$settings = self::get_settings();
+		if ( isset( $_POST['clear'] ) && '1' === $_POST['clear'] ) {
+			$settings['github_token'] = '';
+		} else {
+			$token = isset( $_POST['token'] ) ? sanitize_text_field( wp_unslash( $_POST['token'] ) ) : '';
+			if ( '' === trim( $token ) ) {
+				wp_send_json_error( 'Token cannot be empty.' );
+			}
+			$settings['github_token'] = trim( $token );
+		}
+		update_option( self::OPT_KEY, $settings );
+		delete_transient( self::UPDATE_CACHE_KEY );
+		wp_send_json_success();
+	}
+
+	public static function ajax_check_updates() {
+		check_ajax_referer( self::NONCE_ACTION, 'nonce' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( 'Unauthorized' );
+		}
+		delete_transient( self::UPDATE_CACHE_KEY );
+		$release = self::fetch_latest_github_release( true );
+		if ( is_wp_error( $release ) ) {
+			wp_send_json_error( $release->get_error_message() );
+		}
+
+		// Force WordPress to refresh its update_plugins transient so Plugins page shows the update immediately.
+		delete_site_transient( 'update_plugins' );
+		wp_update_plugins();
+
+		$has_update = version_compare( $release['version'], self::VERSION, '>' );
+		if ( $has_update ) {
+			$plugins_url  = esc_url( self_admin_url( 'plugins.php' ) );
+			$message_html = sprintf(
+				'Update available: <strong>v%s</strong> (installed: v%s) — <a href="%s">Go to Plugins to update</a>',
+				esc_html( $release['version'] ),
+				esc_html( self::VERSION ),
+				$plugins_url
+			);
+		} else {
+			$message_html = sprintf(
+				'Up to date (installed: v%s, latest on GitHub: v%s).',
+				esc_html( self::VERSION ),
+				esc_html( $release['version'] )
+			);
+		}
+
+		wp_send_json_success( [
+			'has_update'   => $has_update,
+			'version'      => $release['version'],
+			'message_html' => $message_html,
+		] );
 	}
 
 	public static function ajax_reset_manifest() {
@@ -1221,12 +2042,24 @@ class Arcos_Static_Sites {
 		$batch_size       = isset( $_POST['batch_size'] ) ? max( 1, min( 12, (int) $_POST['batch_size'] ) ) : 4;
 		$form_bridge      = ! isset( $_POST['form_bridge'] ) || '1' === $_POST['form_bridge'];
 		$allowed_origins  = isset( $_POST['allowed_origins'] ) ? sanitize_text_field( wp_unslash( $_POST['allowed_origins'] ) ) : '*';
+		$prev_settings    = self::get_settings();
+		$ftp_host         = isset( $_POST['ftp_host'] ) ? sanitize_text_field( wp_unslash( $_POST['ftp_host'] ) ) : (string) $prev_settings['ftp_host'];
+		$ftp_port         = isset( $_POST['ftp_port'] ) ? max( 1, min( 65535, (int) $_POST['ftp_port'] ) ) : (int) $prev_settings['ftp_port'];
+		$ftp_user         = isset( $_POST['ftp_user'] ) ? sanitize_text_field( wp_unslash( $_POST['ftp_user'] ) ) : (string) $prev_settings['ftp_user'];
+		$ftp_pass_in      = isset( $_POST['ftp_pass'] ) ? (string) wp_unslash( $_POST['ftp_pass'] ) : '';
+		$ftp_pass         = '' !== $ftp_pass_in ? $ftp_pass_in : (string) $prev_settings['ftp_pass'];
+		$ftp_path         = isset( $_POST['ftp_path'] ) ? sanitize_text_field( wp_unslash( $_POST['ftp_path'] ) ) : (string) $prev_settings['ftp_path'];
+		$ftp_ssl          = isset( $_POST['ftp_ssl'] ) ? ( '1' === $_POST['ftp_ssl'] ? 1 : 0 ) : (int) $prev_settings['ftp_ssl'];
+		$ftp_passive      = isset( $_POST['ftp_passive'] ) ? ( '1' === $_POST['ftp_passive'] ? 1 : 0 ) : (int) $prev_settings['ftp_passive'];
+		if ( '' === $ftp_path ) {
+			$ftp_path = '/';
+		}
 
 		if ( '' !== $canonical_domain ) {
 			$canonical_domain = untrailingslashit( $canonical_domain );
 		}
 
-		if ( ! in_array( $delivery, [ 'zip', 'push', 'both' ], true ) ) {
+		if ( ! in_array( $delivery, [ 'zip', 'push', 'both', 'ftp', 'zip_ftp' ], true ) ) {
 			$delivery = 'zip';
 		}
 
@@ -1239,7 +2072,23 @@ class Arcos_Static_Sites {
 			$resolved_target = $valid;
 		}
 
-		$prev_settings = self::get_settings();
+		if ( 'ftp' === $delivery || 'zip_ftp' === $delivery ) {
+			$ftp_cfg = [
+				'host'    => $ftp_host,
+				'port'    => $ftp_port,
+				'user'    => $ftp_user,
+				'pass'    => $ftp_pass,
+				'path'    => $ftp_path,
+				'ssl'     => $ftp_ssl,
+				'passive' => $ftp_passive,
+			];
+			$conn = self::ftp_connect_and_login( $ftp_cfg );
+			if ( is_wp_error( $conn ) ) {
+				wp_send_json_error( $conn->get_error_message() );
+			}
+			@ftp_close( $conn );
+		}
+
 		update_option( self::OPT_KEY, [
 			'enable_form_bridge' => $form_bridge ? 1 : 0,
 			'allowed_origins'    => '' !== $allowed_origins ? $allowed_origins : '*',
@@ -1254,6 +2103,14 @@ class Arcos_Static_Sites {
 			'generate_htaccess'  => $gen_htaccess ? 1 : 0,
 			'ga4_id'             => $ga4_id,
 			'private_cms_mode'   => ! empty( $prev_settings['private_cms_mode'] ) ? 1 : 0,
+			'github_token'       => isset( $prev_settings['github_token'] ) ? (string) $prev_settings['github_token'] : '',
+			'ftp_host'           => $ftp_host,
+			'ftp_port'           => $ftp_port,
+			'ftp_user'           => $ftp_user,
+			'ftp_pass'           => $ftp_pass,
+			'ftp_path'           => $ftp_path,
+			'ftp_ssl'            => $ftp_ssl,
+			'ftp_passive'        => $ftp_passive,
 		] );
 
 		if ( '' === $base_url ) {
@@ -1356,6 +2213,20 @@ class Arcos_Static_Sites {
 		self::rrmdir( $build_dir );
 		wp_mkdir_p( $build_dir );
 
+		$log_id = self::create_export_log( [
+			'mode'     => $mode,
+			'delivery' => $delivery,
+			'label'    => $release_label,
+			'total'    => count( $items ),
+			'target'   => $resolved_target,
+			'note'     => $note,
+			'batch'    => $batch_size,
+		] );
+
+		if ( empty( $items ) ) {
+			self::finish_export_log( $log_id, 'no_changes', [ 'No page or asset changes detected since last export.' ] );
+		}
+
 		set_transient( 'arcos_ss_job_' . get_current_user_id(), [
 			'mode'             => $mode,
 			'delivery'         => $delivery,
@@ -1376,11 +2247,23 @@ class Arcos_Static_Sites {
 			'new_pages'        => ( 'full' === $mode ) ? [] : $prev_pages,
 			'new_assets'       => ( 'full' === $mode ) ? [] : $prev_assets,
 			'seen_assets'      => [],
+			'ftp'              => [
+				'host'    => $ftp_host,
+				'port'    => $ftp_port,
+				'user'    => $ftp_user,
+				'pass'    => $ftp_pass,
+				'path'    => $ftp_path,
+				'ssl'     => $ftp_ssl,
+				'passive' => $ftp_passive,
+			],
+			'log_id'           => $log_id,
+			'started_at'       => microtime( true ),
 		], HOUR_IN_SECONDS );
 
 		wp_send_json_success( [
-			'total' => count( $items ),
-			'note'  => $note,
+			'total'  => count( $items ),
+			'note'   => $note,
+			'log_id' => $log_id,
 		] );
 	}
 
@@ -1501,6 +2384,10 @@ class Arcos_Static_Sites {
 		$job['new_pages']   = $new_pages;
 		set_transient( 'arcos_ss_job_' . get_current_user_id(), $job, HOUR_IN_SECONDS );
 
+		if ( ! empty( $job['log_id'] ) ) {
+			self::append_export_log( $job['log_id'], $logs );
+		}
+
 		wp_send_json_success( [ 'logs' => $logs ] );
 	}
 
@@ -1510,18 +2397,40 @@ class Arcos_Static_Sites {
 <script id="arcos-static-blog-bridge">
 (function(){
   var INDEX_URL = {$index_url};
-  var trail = document.querySelector('.brx-query-trail[data-query-element-id]');
+  var targetQid = '';
+  var filterEls = document.querySelectorAll('[data-brx-filter]');
+  for (var fi = 0; fi < filterEls.length; fi++) {
+    try {
+      var fcfg = JSON.parse(filterEls[fi].getAttribute('data-brx-filter') || '{}');
+      if (fcfg && fcfg.targetQueryId) { targetQid = fcfg.targetQueryId; break; }
+    } catch (e) {}
+  }
+
+  var trails = Array.prototype.slice.call(document.querySelectorAll('.brx-query-trail[data-query-element-id]'));
+  if (!trails.length) return;
+
+  var trail = null;
+  if (targetQid) {
+    trail = trails.find(function(t) { return t.getAttribute('data-query-element-id') === targetQid; }) || null;
+  }
+  if (!trail) {
+    trail = trails.slice().sort(function(a, b) {
+      return (parseInt(b.getAttribute('data-max-pages') || '1', 10) || 1) - (parseInt(a.getAttribute('data-max-pages') || '1', 10) || 1);
+    })[0];
+  }
   if (!trail) return;
 
   var qid = trail.getAttribute('data-query-element-id');
-  var perPage = 10;
-  try {
-    var qv = JSON.parse(trail.getAttribute('data-query-vars') || '{}');
-    if (qv.posts_per_page) perPage = parseInt(qv.posts_per_page, 10) || 10;
-  } catch (e) {}
-
   var cards = Array.prototype.slice.call(document.querySelectorAll('.brxe-' + qid));
   if (!cards.length) return;
+
+  var perPage = 0;
+  try {
+    var qv = JSON.parse(trail.getAttribute('data-query-vars') || '{}');
+    if (qv && qv.posts_per_page) perPage = parseInt(qv.posts_per_page, 10) || 0;
+  } catch (e) {}
+  if (!perPage) perPage = cards.length || 10;
+
   var container = cards[0].parentNode;
   var templateCard = cards[0].cloneNode(true);
   var pagWrap = document.querySelector('.bricks-pagination');
@@ -1669,6 +2578,16 @@ class Arcos_Static_Sites {
     if (!el || !el.closest) return;
     if (el.closest('.brxe-filter-checkbox, .brxe-filter-radio, .brxe-filter-select')) {
       e.stopImmediatePropagation();
+      var radioWrap = el.closest('.brxe-filter-radio');
+      if (radioWrap) {
+        radioWrap.querySelectorAll('.brx-option-active').forEach(function(n){ n.classList.remove('brx-option-active'); });
+        var lbl = el.closest('label') || el.parentElement;
+        if (lbl) {
+          lbl.classList.add('brx-option-active');
+          var txt = lbl.querySelector('.brx-option-text');
+          if (txt) txt.classList.add('brx-option-active');
+        }
+      }
       var checked = Array.prototype.slice.call(document.querySelectorAll('.brxe-filter-checkbox input:checked, .brxe-filter-radio input:checked')).map(function(i){ return i.value; });
       document.querySelectorAll('.brxe-filter-select select').forEach(function(s){ if (s.value) checked.push(s.value); });
       state.cats = checked.filter(Boolean);
@@ -1844,6 +2763,7 @@ HTML;
 	}
 
 	public static function ajax_zip() {
+		@set_time_limit( 300 );
 		check_ajax_referer( self::NONCE_ACTION, 'nonce' );
 		if ( ! current_user_can( 'manage_options' ) ) {
 			wp_send_json_error( 'Unauthorized' );
@@ -1877,6 +2797,8 @@ HTML;
 			'files'        => 0,
 			'pushed_files' => 0,
 			'target_dir'   => $target_dir,
+			'ftp_files'    => 0,
+			'ftp_dest'     => '',
 		];
 
 		// 1. Direct push to live directory on same server
@@ -1906,8 +2828,8 @@ HTML;
 			$response['pushed_files'] = $pushed;
 		}
 
-		// 2. ZIP archive (if 'zip' or 'both')
-		if ( 'zip' === $delivery || 'both' === $delivery ) {
+		// 2. ZIP archive (if 'zip', 'both', or 'zip_ftp')
+		if ( 'zip' === $delivery || 'both' === $delivery || 'zip_ftp' === $delivery ) {
 			if ( ! class_exists( 'ZipArchive' ) ) {
 				wp_send_json_error( 'PHP ZipArchive extension is not enabled on this server.' );
 			}
@@ -1954,6 +2876,19 @@ HTML;
 			update_option( self::RELEASES_KEY, $releases, false );
 		}
 
+		// 3. FTP / FTPS upload (if 'ftp' or 'zip_ftp')
+		if ( ( 'ftp' === $delivery || 'zip_ftp' === $delivery ) && is_array( $job ) && ! empty( $job['ftp'] ) ) {
+			$ftp_res = self::ftp_push_directory( $build_dir, $job['ftp'] );
+			if ( is_wp_error( $ftp_res ) ) {
+				if ( ! empty( $job['log_id'] ) ) {
+					self::finish_export_log( $job['log_id'], 'failed', [ 'FTP ERROR: ' . $ftp_res->get_error_message() ] );
+				}
+				wp_send_json_error( 'FTP upload failed: ' . $ftp_res->get_error_message() );
+			}
+			$response['ftp_files'] = (int) $ftp_res;
+			$response['ftp_dest']  = ( $job['ftp']['host'] ?? '' ) . ':' . ( $job['ftp']['path'] ?? '/' );
+		}
+
 		if ( is_array( $job ) ) {
 			update_option( self::MANIFEST_KEY, [
 				'last_export' => gmdate( 'Y-m-d H:i:s' ),
@@ -1963,10 +2898,348 @@ HTML;
 			], false );
 		}
 
+		if ( ! empty( $job['log_id'] ) ) {
+			$summary = [];
+			if ( ! empty( $response['pushed_files'] ) ) {
+				$summary[] = 'Pushed ' . $response['pushed_files'] . ' file(s) to ' . ( $response['target_dir'] ?? '' );
+			}
+			if ( ! empty( $response['ftp_files'] ) ) {
+				$summary[] = 'Uploaded ' . $response['ftp_files'] . ' file(s) via FTP to ' . ( $response['ftp_dest'] ?? '' );
+			}
+			if ( ! empty( $response['filename'] ) ) {
+				$summary[] = 'Archive created: ' . $response['filename'] . ' (' . ( $response['files'] ?? 0 ) . ' files, ' . ( $response['size'] ?? '' ) . ')';
+			}
+			$elapsed   = ! empty( $job['started_at'] ) ? round( microtime( true ) - (float) $job['started_at'], 2 ) : 0;
+			$summary[] = 'Completed in ' . $elapsed . 's';
+			self::finish_export_log( $job['log_id'], 'completed', $summary );
+		}
+
 		self::rrmdir( $build_dir );
 		delete_transient( 'arcos_ss_job_' . get_current_user_id() );
 
 		wp_send_json_success( $response );
+	}
+
+	private static function get_logs_dir() {
+		$dir = self::get_base_storage_dir() . '/logs';
+		if ( ! file_exists( $dir ) ) {
+			wp_mkdir_p( $dir );
+			@file_put_contents( $dir . '/index.php', "<?php\n// Silence is golden.\n" );
+			@file_put_contents( $dir . '/.htaccess', "Deny from all\n" );
+		}
+		return $dir;
+	}
+
+	private static function get_export_logs() {
+		$logs = get_option( self::LOGS_KEY, [] );
+		return is_array( $logs ) ? $logs : [];
+	}
+
+	private static function create_export_log( $meta ) {
+		$log_id = gmdate( 'Ymd-His' ) . '-' . strtolower( wp_generate_password( 6, false, false ) );
+		$user   = wp_get_current_user();
+		$header = [
+			'=== Arcos Static Sites Export Log ===',
+			'Log ID:      ' . $log_id,
+			'Started:     ' . gmdate( 'Y-m-d H:i:s' ) . ' UTC',
+			'User:        ' . ( $user && $user->user_login ? $user->user_login : 'unknown' ),
+			'Mode:        ' . ( $meta['mode'] ?? '' ),
+			'Delivery:    ' . ( $meta['delivery'] ?? '' ),
+			'Batch Size:  ' . ( $meta['batch'] ?? 4 ),
+			'Total URLs:  ' . ( $meta['total'] ?? 0 ),
+		];
+		if ( ! empty( $meta['label'] ) ) {
+			$header[] = 'Label:       ' . $meta['label'];
+		}
+		if ( ! empty( $meta['target'] ) ) {
+			$header[] = 'Target Dir:  ' . $meta['target'];
+		}
+		if ( ! empty( $meta['note'] ) ) {
+			$header[] = 'Note:        ' . $meta['note'];
+		}
+		$header[] = str_repeat( '-', 48 );
+
+		$file = self::get_logs_dir() . '/export-' . sanitize_file_name( $log_id ) . '.log';
+		@file_put_contents( $file, implode( "\n", $header ) . "\n" );
+
+		$logs = self::get_export_logs();
+		array_unshift( $logs, [
+			'id'         => $log_id,
+			'created_at' => gmdate( 'Y-m-d H:i:s' ),
+			'mode'       => (string) ( $meta['mode'] ?? '' ),
+			'delivery'   => (string) ( $meta['delivery'] ?? '' ),
+			'label'      => (string) ( $meta['label'] ?? '' ),
+			'total'      => (int) ( $meta['total'] ?? 0 ),
+			'status'     => 'running',
+		] );
+		if ( count( $logs ) > 50 ) {
+			$removed = array_splice( $logs, 50 );
+			foreach ( $removed as $rem ) {
+				if ( ! empty( $rem['id'] ) ) {
+					@unlink( self::get_logs_dir() . '/export-' . sanitize_file_name( $rem['id'] ) . '.log' );
+				}
+			}
+		}
+		update_option( self::LOGS_KEY, $logs, false );
+		return $log_id;
+	}
+
+	private static function append_export_log( $log_id, $lines ) {
+		if ( empty( $log_id ) || empty( $lines ) ) {
+			return;
+		}
+		$file = self::get_logs_dir() . '/export-' . sanitize_file_name( $log_id ) . '.log';
+		$ts   = gmdate( 'H:i:s' );
+		$out  = '';
+		foreach ( (array) $lines as $line ) {
+			$out .= '[' . $ts . '] ' . $line . "\n";
+		}
+		@file_put_contents( $file, $out, FILE_APPEND );
+	}
+
+	private static function finish_export_log( $log_id, $status, $summary_lines = [] ) {
+		if ( empty( $log_id ) ) {
+			return;
+		}
+		$file = self::get_logs_dir() . '/export-' . sanitize_file_name( $log_id ) . '.log';
+		$out  = str_repeat( '-', 48 ) . "\n";
+		foreach ( (array) $summary_lines as $line ) {
+			$out .= '[' . gmdate( 'H:i:s' ) . '] ' . $line . "\n";
+		}
+		$out .= 'Finished: ' . gmdate( 'Y-m-d H:i:s' ) . " UTC (Status: " . $status . ")\n";
+		@file_put_contents( $file, $out, FILE_APPEND );
+
+		$logs = self::get_export_logs();
+		foreach ( $logs as &$lg ) {
+			if ( isset( $lg['id'] ) && $lg['id'] === $log_id ) {
+				$lg['status']      = $status;
+				$lg['finished_at'] = gmdate( 'Y-m-d H:i:s' );
+				break;
+			}
+		}
+		update_option( self::LOGS_KEY, $logs, false );
+	}
+
+	public static function ajax_get_log() {
+		check_ajax_referer( self::NONCE_ACTION, 'nonce' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( 'Unauthorized' );
+		}
+		$id   = isset( $_POST['id'] ) ? sanitize_file_name( wp_unslash( $_POST['id'] ) ) : '';
+		$file = self::get_logs_dir() . '/export-' . $id . '.log';
+		if ( '' === $id || ! file_exists( $file ) ) {
+			wp_send_json_error( 'Log file not found.' );
+		}
+		wp_send_json_success( [ 'content' => (string) file_get_contents( $file ) ] );
+	}
+
+	public static function ajax_download_log() {
+		check_ajax_referer( self::NONCE_ACTION, 'nonce' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( 'Unauthorized', 403 );
+		}
+		$id   = isset( $_GET['id'] ) ? sanitize_file_name( wp_unslash( $_GET['id'] ) ) : '';
+		$file = self::get_logs_dir() . '/export-' . $id . '.log';
+		if ( '' === $id || ! file_exists( $file ) ) {
+			wp_die( 'Log file not found.', 404 );
+		}
+		header( 'Content-Type: text/plain; charset=utf-8' );
+		header( 'Content-Disposition: attachment; filename="arcos-export-' . $id . '.log"' );
+		header( 'Content-Length: ' . filesize( $file ) );
+		readfile( $file );
+		exit;
+	}
+
+	public static function ajax_delete_log() {
+		check_ajax_referer( self::NONCE_ACTION, 'nonce' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( 'Unauthorized' );
+		}
+		$id   = isset( $_POST['id'] ) ? sanitize_file_name( wp_unslash( $_POST['id'] ) ) : '';
+		$file = self::get_logs_dir() . '/export-' . $id . '.log';
+		if ( file_exists( $file ) ) {
+			@unlink( $file );
+		}
+		$logs = array_values( array_filter( self::get_export_logs(), function( $lg ) use ( $id ) {
+			return isset( $lg['id'] ) && $lg['id'] !== $id;
+		} ) );
+		update_option( self::LOGS_KEY, $logs, false );
+		wp_send_json_success();
+	}
+
+	public static function ajax_clear_logs() {
+		check_ajax_referer( self::NONCE_ACTION, 'nonce' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( 'Unauthorized' );
+		}
+		$files = glob( self::get_logs_dir() . '/*.log' ) ?: [];
+		foreach ( $files as $f ) {
+			@unlink( $f );
+		}
+		update_option( self::LOGS_KEY, [], false );
+		wp_send_json_success();
+	}
+
+	public static function ajax_log_error() {
+		check_ajax_referer( self::NONCE_ACTION, 'nonce' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( 'Unauthorized' );
+		}
+		$log_id = isset( $_POST['log_id'] ) ? sanitize_file_name( wp_unslash( $_POST['log_id'] ) ) : '';
+		$error  = isset( $_POST['error'] ) ? sanitize_text_field( wp_unslash( $_POST['error'] ) ) : 'Unknown error';
+		if ( '' !== $log_id ) {
+			self::finish_export_log( $log_id, 'failed', [ 'ERROR: ' . $error ] );
+		}
+		wp_send_json_success();
+	}
+
+	public static function ajax_cancel() {
+		check_ajax_referer( self::NONCE_ACTION, 'nonce' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( 'Unauthorized' );
+		}
+		$user_key = 'arcos_ss_job_' . get_current_user_id();
+		$job      = get_transient( $user_key );
+		$log_id   = isset( $_POST['log_id'] ) ? sanitize_file_name( wp_unslash( $_POST['log_id'] ) ) : '';
+		if ( '' === $log_id && is_array( $job ) && ! empty( $job['log_id'] ) ) {
+			$log_id = sanitize_file_name( (string) $job['log_id'] );
+		}
+		$build_dir = self::get_base_storage_dir() . '/build';
+		self::rrmdir( $build_dir );
+		delete_transient( $user_key );
+		if ( '' !== $log_id ) {
+			self::finish_export_log( $log_id, 'cancelled', [ 'CANCELLED: Export stopped by user.' ] );
+		}
+		wp_send_json_success();
+	}
+
+	private static function ftp_connect_and_login( $cfg ) {
+		if ( ! extension_loaded( 'ftp' ) ) {
+			return new WP_Error( 'arcos_ftp_missing', 'PHP FTP extension is not enabled on this server.' );
+		}
+		$host = trim( (string) ( $cfg['host'] ?? '' ) );
+		$port = max( 1, min( 65535, (int) ( $cfg['port'] ?? 21 ) ) );
+		$user = (string) ( $cfg['user'] ?? '' );
+		$pass = (string) ( $cfg['pass'] ?? '' );
+		$ssl  = ! empty( $cfg['ssl'] );
+		$pasv = ! isset( $cfg['passive'] ) || ! empty( $cfg['passive'] );
+
+		if ( '' === $host || '' === $user || '' === $pass ) {
+			return new WP_Error( 'arcos_ftp_creds', 'FTP host, username, and password are required.' );
+		}
+		if ( $ssl && ! function_exists( 'ftp_ssl_connect' ) ) {
+			return new WP_Error( 'arcos_ftps_unsupported', 'FTPS (ftp_ssl_connect) is not supported by PHP on this server.' );
+		}
+
+		$conn = $ssl ? @ftp_ssl_connect( $host, $port, 15 ) : @ftp_connect( $host, $port, 15 );
+		if ( ! $conn ) {
+			return new WP_Error( 'arcos_ftp_connect', 'Could not connect to ' . $host . ':' . $port );
+		}
+		if ( ! @ftp_login( $conn, $user, $pass ) ) {
+			@ftp_close( $conn );
+			return new WP_Error( 'arcos_ftp_login', 'FTP login failed for user ' . $user );
+		}
+		@ftp_pasv( $conn, $pasv );
+		return $conn;
+	}
+
+	private static function ftp_ensure_dir( $conn, $remote_dir, &$cache ) {
+		$remote_dir = '/' . trim( str_replace( '\\', '/', $remote_dir ), '/' );
+		if ( '/' === $remote_dir || isset( $cache[ $remote_dir ] ) ) {
+			return true;
+		}
+		$parts = explode( '/', ltrim( $remote_dir, '/' ) );
+		$cur   = '';
+		foreach ( $parts as $p ) {
+			if ( '' === $p ) {
+				continue;
+			}
+			$cur .= '/' . $p;
+			if ( isset( $cache[ $cur ] ) ) {
+				continue;
+			}
+			if ( ! @ftp_chdir( $conn, $cur ) ) {
+				if ( ! @ftp_mkdir( $conn, $cur ) ) {
+					return false;
+				}
+			}
+			$cache[ $cur ] = true;
+		}
+		return true;
+	}
+
+	private static function ftp_push_directory( $local_dir, $cfg ) {
+		$conn = self::ftp_connect_and_login( $cfg );
+		if ( is_wp_error( $conn ) ) {
+			return $conn;
+		}
+		$remote_root = '/' . trim( str_replace( '\\', '/', (string) ( $cfg['path'] ?? '/' ) ), '/' );
+		if ( '/' !== $remote_root ) {
+			$dir_cache = [];
+			if ( ! self::ftp_ensure_dir( $conn, $remote_root, $dir_cache ) ) {
+				@ftp_close( $conn );
+				return new WP_Error( 'arcos_ftp_mkdir', 'Could not access or create remote directory: ' . $remote_root );
+			}
+		} else {
+			$dir_cache = [ '/' => true ];
+		}
+
+		$uploaded = 0;
+		$base_len = strlen( trailingslashit( $local_dir ) );
+		$it       = new RecursiveIteratorIterator(
+			new RecursiveDirectoryIterator( $local_dir, RecursiveDirectoryIterator::SKIP_DOTS ),
+			RecursiveIteratorIterator::LEAVES_ONLY
+		);
+		foreach ( $it as $file ) {
+			if ( ! $file->isFile() ) {
+				continue;
+			}
+			$full        = $file->getPathname();
+			$rel         = str_replace( '\\', '/', substr( $full, $base_len ) );
+			$remote_file = ( '/' === $remote_root ? '' : $remote_root ) . '/' . ltrim( $rel, '/' );
+			$remote_dir  = dirname( $remote_file );
+			if ( ! self::ftp_ensure_dir( $conn, $remote_dir, $dir_cache ) ) {
+				@ftp_close( $conn );
+				return new WP_Error( 'arcos_ftp_mkdir', 'Failed creating remote directory: ' . $remote_dir );
+			}
+			if ( ! @ftp_put( $conn, $remote_file, $full, FTP_BINARY ) ) {
+				@ftp_close( $conn );
+				return new WP_Error( 'arcos_ftp_put', 'Failed uploading file: ' . $remote_file );
+			}
+			$uploaded++;
+		}
+		@ftp_close( $conn );
+		return $uploaded;
+	}
+
+	public static function ajax_test_ftp() {
+		check_ajax_referer( self::NONCE_ACTION, 'nonce' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( 'Unauthorized' );
+		}
+		$prev = self::get_settings();
+		$pass = isset( $_POST['ftp_pass'] ) ? (string) wp_unslash( $_POST['ftp_pass'] ) : '';
+		$cfg  = [
+			'host'    => isset( $_POST['ftp_host'] ) ? sanitize_text_field( wp_unslash( $_POST['ftp_host'] ) ) : '',
+			'port'    => isset( $_POST['ftp_port'] ) ? max( 1, min( 65535, (int) $_POST['ftp_port'] ) ) : 21,
+			'user'    => isset( $_POST['ftp_user'] ) ? sanitize_text_field( wp_unslash( $_POST['ftp_user'] ) ) : '',
+			'pass'    => '' !== $pass ? $pass : (string) ( $prev['ftp_pass'] ?? '' ),
+			'path'    => isset( $_POST['ftp_path'] ) ? sanitize_text_field( wp_unslash( $_POST['ftp_path'] ) ) : '/',
+			'ssl'     => isset( $_POST['ftp_ssl'] ) && '1' === $_POST['ftp_ssl'],
+			'passive' => ! isset( $_POST['ftp_passive'] ) || '1' === $_POST['ftp_passive'],
+		];
+		$conn = self::ftp_connect_and_login( $cfg );
+		if ( is_wp_error( $conn ) ) {
+			wp_send_json_error( $conn->get_error_message() );
+		}
+		$remote_path = '/' . trim( str_replace( '\\', '/', $cfg['path'] ), '/' );
+		$cache       = [];
+		$dir_ok      = self::ftp_ensure_dir( $conn, $remote_path, $cache );
+		@ftp_close( $conn );
+		if ( ! $dir_ok ) {
+			wp_send_json_error( 'Logged in, but could not access or create ' . $remote_path );
+		}
+		wp_send_json_success( [ 'message' => 'Connected & verified ' . $remote_path ] );
 	}
 
 	public static function ajax_delete_zip() {
@@ -2261,6 +3534,38 @@ HTML;
 
 		$text = str_replace( [ $https_home, $http_home ], $target_base, $text );
 		$text = str_replace( $esc_home, $esc_target, $text );
+
+		// Also rewrite bare home URLs without a trailing slash (e.g. Bricks Logo <a class="brxe-logo" href="https://site.local">).
+		$target_root       = '/' === $target_base ? '/' : untrailingslashit( $target_base );
+		$esc_target_root   = str_replace( '/', '\\/', $target_root );
+		$https_no_slash    = untrailingslashit( $https_home );
+		$http_no_slash     = untrailingslashit( $http_home );
+		$esc_https_no_sl   = str_replace( '/', '\\/', $https_no_slash );
+		$esc_http_no_sl    = str_replace( '/', '\\/', $http_no_slash );
+		$boundary          = '(?=["\'\s<&#?\\\\]|$)';
+
+		$replaced = preg_replace(
+			[
+				'~' . preg_quote( $https_no_slash, '~' ) . $boundary . '~i',
+				'~' . preg_quote( $http_no_slash, '~' ) . $boundary . '~i',
+			],
+			$target_root,
+			$text
+		);
+		if ( null !== $replaced ) {
+			$text = $replaced;
+		}
+		$replaced = preg_replace(
+			[
+				'~' . preg_quote( $esc_https_no_sl, '~' ) . $boundary . '~i',
+				'~' . preg_quote( $esc_http_no_sl, '~' ) . $boundary . '~i',
+			],
+			$esc_target_root,
+			$text
+		);
+		if ( null !== $replaced ) {
+			$text = $replaced;
+		}
 
 		if ( $home_path ) {
 			$sub_prefix = '/' . $home_path . '/';
