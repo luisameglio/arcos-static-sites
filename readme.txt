@@ -4,13 +4,16 @@ Tags: static site, bricks, bricksforge, seo, geo, polylang
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 8.0
-Stable tag: 1.9.6
+Stable tag: 1.9.7
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
 Generate clean, rate-limit-free static HTML/CSS/JS/media ZIP exports or push directly to a same-server live directory, with incremental delta builds, Bricks + Bricksforge Pro Forms bridging, SEOPress SEO/GEO optimization, and client-side blog filtering.
 
 == Changelog ==
+
+= 1.9.7 =
+* Refactored `arcos-static-sites.php` into modular files under `includes/` (`trait-admin.php`, `trait-exporter.php`, `trait-forms-bridge.php`, `trait-ftp.php`, `trait-logs.php`, `trait-updater.php`) and updated the GitHub Actions release workflow to package `includes/`.
 
 = 1.9.6 =
 * Added automatic export of public WordPress taxonomy term archives (`category`, `post_tag`, and public custom taxonomies with non-empty terms) so archive links no longer 404 on static exports.
