@@ -173,71 +173,92 @@ trait Arcos_Static_Sites_Exporter {
 				$note = 'Global Header/Footer/Template or child style.css changed — refreshing all HTML pages (unchanged assets still skipped).';
 			}
 
-			$front_id = (int) get_option( 'page_on_front' );
-			$ids      = get_posts( [
-				'post_type'      => $post_types,
-				'post_status'    => 'publish',
-				'posts_per_page' => -1,
-				'orderby'        => 'ID',
-				'order'          => 'ASC',
-			] );
+			$seen_urls   = [];
+			$wpml_langs  = has_filter( 'wpml_active_languages' ) ? apply_filters( 'wpml_active_languages', null, [ 'skip_missing' => 0 ] ) : null;
+			$wpml_active = is_array( $wpml_langs ) && ! empty( $wpml_langs );
+			$wpml_orig   = $wpml_active ? apply_filters( 'wpml_current_language', null ) : null;
+			$lang_passes = $wpml_active ? array_keys( $wpml_langs ) : [ null ];
 
-			$seen_urls = [];
-			if ( ! $front_id ) {
-				$home = home_url( '/' );
-				$seen_urls[ $home ] = true;
-				if ( 'full' === $mode || $global_dirty ) {
-					$items[] = [ 'id' => 0, 'url' => $home, 'mod' => gmdate( 'Y-m-d H:i:s' ) ];
-				}
-			}
+			$taxonomies = get_taxonomies( [ 'public' => true ], 'names' );
+			unset( $taxonomies['post_format'] );
 
-			foreach ( $ids as $p ) {
-				$link = get_permalink( $p->ID );
-				if ( ! $link || isset( $seen_urls[ $link ] ) ) {
-					continue;
+			foreach ( $lang_passes as $lang_code ) {
+				if ( $wpml_active && null !== $lang_code ) {
+					do_action( 'wpml_switch_language', $lang_code );
 				}
-				$seen_urls[ $link ] = true;
-				if ( 'full' === $mode || $global_dirty || empty( $prev_pages[ $p->ID ] ) || $prev_pages[ $p->ID ] !== $p->post_modified_gmt ) {
-					$items[] = [ 'id' => $p->ID, 'url' => $link, 'mod' => $p->post_modified_gmt ];
-				}
-			}
 
-			// Include CPT archive pages (has_archive => true) for selected post types
-			foreach ( $post_types as $pt ) {
-				$pt_obj = get_post_type_object( $pt );
-				if ( $pt_obj && ! empty( $pt_obj->has_archive ) ) {
-					$arch_url = get_post_type_archive_link( $pt );
-					if ( $arch_url && ! isset( $seen_urls[ $arch_url ] ) ) {
-						$seen_urls[ $arch_url ] = true;
+				$front_id = (int) get_option( 'page_on_front' );
+				$ids      = get_posts( [
+					'post_type'        => $post_types,
+					'post_status'      => 'publish',
+					'posts_per_page'   => -1,
+					'orderby'          => 'ID',
+					'order'            => 'ASC',
+					'suppress_filters' => false,
+				] );
+
+				if ( ! $front_id ) {
+					$home = ( $wpml_active && ! empty( $wpml_langs[ $lang_code ]['url'] ) )
+						? (string) $wpml_langs[ $lang_code ]['url']
+						: home_url( '/' );
+					if ( $home && ! isset( $seen_urls[ $home ] ) ) {
+						$seen_urls[ $home ] = true;
 						if ( 'full' === $mode || $global_dirty ) {
-							$items[] = [ 'id' => 0, 'url' => $arch_url, 'mod' => gmdate( 'Y-m-d H:i:s' ) ];
+							$items[] = [ 'id' => 0, 'url' => $home, 'mod' => gmdate( 'Y-m-d H:i:s' ) ];
+						}
+					}
+				}
+
+				foreach ( $ids as $p ) {
+					$link = get_permalink( $p->ID );
+					if ( ! $link || isset( $seen_urls[ $link ] ) ) {
+						continue;
+					}
+					$seen_urls[ $link ] = true;
+					if ( 'full' === $mode || $global_dirty || empty( $prev_pages[ $p->ID ] ) || $prev_pages[ $p->ID ] !== $p->post_modified_gmt ) {
+						$items[] = [ 'id' => $p->ID, 'url' => $link, 'mod' => $p->post_modified_gmt ];
+					}
+				}
+
+				// Include CPT archive pages (has_archive => true) for selected post types
+				foreach ( $post_types as $pt ) {
+					$pt_obj = get_post_type_object( $pt );
+					if ( $pt_obj && ! empty( $pt_obj->has_archive ) ) {
+						$arch_url = get_post_type_archive_link( $pt );
+						if ( $arch_url && ! isset( $seen_urls[ $arch_url ] ) ) {
+							$seen_urls[ $arch_url ] = true;
+							if ( 'full' === $mode || $global_dirty ) {
+								$items[] = [ 'id' => 0, 'url' => $arch_url, 'mod' => gmdate( 'Y-m-d H:i:s' ) ];
+							}
+						}
+					}
+				}
+
+				// Include public taxonomy term archives (categories, tags, and public custom taxonomies)
+				$tax_dirty = ( 'full' === $mode || $global_dirty || ! empty( $items ) );
+				foreach ( $taxonomies as $tax ) {
+					$terms = get_terms( [
+						'taxonomy'   => $tax,
+						'hide_empty' => true,
+					] );
+					if ( is_wp_error( $terms ) || empty( $terms ) ) {
+						continue;
+					}
+					foreach ( $terms as $term ) {
+						$term_url = get_term_link( $term );
+						if ( is_wp_error( $term_url ) || ! $term_url || isset( $seen_urls[ $term_url ] ) ) {
+							continue;
+						}
+						$seen_urls[ $term_url ] = true;
+						if ( $tax_dirty ) {
+							$items[] = [ 'id' => 0, 'url' => $term_url, 'mod' => gmdate( 'Y-m-d H:i:s' ) ];
 						}
 					}
 				}
 			}
 
-			// Include public taxonomy term archives (categories, tags, and public custom taxonomies)
-			$taxonomies = get_taxonomies( [ 'public' => true ], 'names' );
-			unset( $taxonomies['post_format'] );
-			$tax_dirty = ( 'full' === $mode || $global_dirty || ! empty( $items ) );
-			foreach ( $taxonomies as $tax ) {
-				$terms = get_terms( [
-					'taxonomy'   => $tax,
-					'hide_empty' => true,
-				] );
-				if ( is_wp_error( $terms ) || empty( $terms ) ) {
-					continue;
-				}
-				foreach ( $terms as $term ) {
-					$term_url = get_term_link( $term );
-					if ( is_wp_error( $term_url ) || ! $term_url || isset( $seen_urls[ $term_url ] ) ) {
-						continue;
-					}
-					$seen_urls[ $term_url ] = true;
-					if ( $tax_dirty ) {
-						$items[] = [ 'id' => 0, 'url' => $term_url, 'mod' => gmdate( 'Y-m-d H:i:s' ) ];
-					}
-				}
+			if ( $wpml_active && null !== $wpml_orig ) {
+				do_action( 'wpml_switch_language', $wpml_orig );
 			}
 		}
 
@@ -692,11 +713,12 @@ HT;
 		$home_path   = trim( (string) wp_parse_url( $home, PHP_URL_PATH ), '/' );
 		$target_base = $job['base_url'];
 		$posts       = get_posts( [
-			'post_type'      => 'post',
-			'post_status'    => 'publish',
-			'posts_per_page' => -1,
-			'orderby'        => 'date',
-			'order'          => 'DESC',
+			'post_type'        => 'post',
+			'post_status'      => 'publish',
+			'posts_per_page'   => -1,
+			'orderby'          => 'date',
+			'order'            => 'DESC',
+			'suppress_filters' => true,
 		] );
 		$items = [];
 		foreach ( $posts as $p ) {
@@ -711,7 +733,15 @@ HT;
 					$cat_slugs[] = $c->slug;
 				}
 			}
-			$lang = function_exists( 'pll_get_post_language' ) ? (string) pll_get_post_language( $p->ID, 'slug' ) : '';
+			$lang = '';
+			if ( function_exists( 'pll_get_post_language' ) ) {
+				$lang = (string) pll_get_post_language( $p->ID, 'slug' );
+			} elseif ( has_filter( 'wpml_post_language_details' ) ) {
+				$wpml_info = apply_filters( 'wpml_post_language_details', null, $p->ID );
+				if ( is_array( $wpml_info ) && ! empty( $wpml_info['language_code'] ) ) {
+					$lang = strtolower( (string) $wpml_info['language_code'] );
+				}
+			}
 			$items[] = [
 				'id'         => $p->ID,
 				'title'      => html_entity_decode( get_the_title( $p->ID ), ENT_QUOTES, 'UTF-8' ),

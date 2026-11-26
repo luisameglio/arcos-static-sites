@@ -240,11 +240,12 @@ trait Arcos_Static_Sites_Admin {
 		$parent_hint      = trailingslashit( dirname( untrailingslashit( ABSPATH ) ) );
 		$detected_folders = self::detect_server_folders();
 		$picker_posts     = get_posts( [
-			'post_type'      => array_keys( $post_types ),
-			'post_status'    => 'publish',
-			'posts_per_page' => -1,
-			'orderby'        => 'post_type title',
-			'order'          => 'ASC',
+			'post_type'        => array_keys( $post_types ),
+			'post_status'      => 'publish',
+			'posts_per_page'   => -1,
+			'orderby'          => 'post_type title',
+			'order'            => 'ASC',
+			'suppress_filters' => true,
 		] );
 		$home_root = trailingslashit( home_url( '/' ) );
 		$env_checks = self::get_environment_checks();
