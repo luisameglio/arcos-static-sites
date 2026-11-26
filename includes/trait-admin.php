@@ -222,8 +222,17 @@ trait Arcos_Static_Sites_Admin {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			return;
 		}
-		$post_types = get_post_types( [ 'public' => true ], 'objects' );
-		unset( $post_types['attachment'], $post_types['bricks_template'], $post_types['elementor_library'] );
+		$post_types = array_merge(
+			get_post_types( [ 'public' => true ], 'objects' ),
+			get_post_types( [ 'publicly_queryable' => true ], 'objects' )
+		);
+		unset(
+			$post_types['attachment'],
+			$post_types['bricks_template'],
+			$post_types['elementor_library'],
+			$post_types['e-landing-page'],
+			$post_types['wp_navigation']
+		);
 		$settings     = self::get_settings();
 		$manifest     = self::get_manifest();
 		$storage_dir  = self::get_base_storage_dir();
