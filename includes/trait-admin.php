@@ -482,7 +482,7 @@ trait Arcos_Static_Sites_Admin {
 							<th scope="row">SEO &amp; GEO (SEOPress)</th>
 							<td>
 								<label for="arcos-canonical-domain"><strong>Production Domain for Canonicals &amp; Schema (Optional):</strong></label><br />
-								<input type="url" id="arcos-canonical-domain" value="<?php echo esc_attr( $settings['canonical_domain'] ); ?>" class="regular-text" placeholder="e.g. https://austintrs.com" style="margin:4px 0 8px;" />
+								<input type="url" id="arcos-canonical-domain" value="<?php echo esc_attr( $settings['canonical_domain'] ); ?>" class="regular-text" placeholder="e.g. https://domain.com" style="margin:4px 0 8px;" />
 								<p class="description" style="margin-bottom:10px;">When set, <code>&lt;link rel="canonical"&gt;</code>, <code>og:url</code>, JSON-LD schema, and <code>sitemap.xml</code> use this full domain even when asset paths are <code>/</code>.</p>
 								<label style="display:block;margin-bottom:6px;">
 									<input type="checkbox" id="arcos-force-index" <?php checked( ! empty( $settings['force_index'] ) ); ?> />
@@ -497,7 +497,7 @@ trait Arcos_Static_Sites_Admin {
 									<strong>Generate Optimized <code>.htaccess</code> (Caching &amp; Gzip)</strong> — Adds 1-year browser cache headers for static assets &amp; Gzip compression (Apache/LiteSpeed)
 								</label>
 								<label for="arcos-ga4-id"><strong>Google Tag / GA4 / GTM ID (Optional):</strong></label><br />
-								<input type="text" id="arcos-ga4-id" value="<?php echo esc_attr( $settings['ga4_id'] ); ?>" class="regular-text" placeholder="e.g. GT-PHRS7VL, G-XXXXXXXXXX, or GTM-XXXXXXX" style="margin-top:4px;" />
+								<input type="text" id="arcos-ga4-id" value="<?php echo esc_attr( $settings['ga4_id'] ); ?>" class="regular-text" placeholder="e.g. GT-XXXXXXX, G-XXXXXXXXXX, or GTM-XXXXXXX" style="margin-top:4px;" />
 								<p class="description">Supports <code>G-</code>, <code>GT-</code>, <code>AW-</code> (<code>gtag.js</code>) and <code>GTM-</code> (Google Tag Manager). Leave blank to keep existing page tags.</p>
 							</td>
 						</tr>
