@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Arcos Static Sites
  * Description: Generate clean, rate-limit-free static HTML/CSS/JS/media ZIP exports or push directly to a same-server live directory, with incremental delta builds and Bricks + ACF dynamic tag form bridging.
- * Version: 1.9.4
+ * Version: 1.9.6
  * Author: Arcos Multimedia Group
  * License: GPL-2.0-or-later
  * Update URI: https://github.com/luisameglio/arcos-static-sites
@@ -14,7 +14,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Arcos_Static_Sites {
 
-	const VERSION          = '1.9.4';
+	const VERSION          = '1.9.6';
 	const GITHUB_REPO      = 'luisameglio/arcos-static-sites';
 	const UPDATE_CACHE_KEY = 'arcos_static_sites_gh_update';
 	const NONCE_ACTION     = 'arcos_static_sites_nonce';
@@ -188,8 +188,13 @@ class Arcos_Static_Sites {
 					continue;
 				}
 				if ( 'arcos-static-sites.zip' === $asset['name'] || preg_match( '/^arcos-static-sites.*\.zip$/i', $asset['name'] ) ) {
-					// Use API asset URL so private repo downloads authenticate via Bearer + Accept: application/octet-stream.
-					$package = ! empty( $asset['url'] ) ? (string) $asset['url'] : (string) ( $asset['browser_download_url'] ?? $package );
+					if ( '' !== $token && ! empty( $asset['url'] ) ) {
+						$package = (string) $asset['url'];
+					} elseif ( ! empty( $asset['browser_download_url'] ) ) {
+						$package = (string) $asset['browser_download_url'];
+					} elseif ( ! empty( $asset['url'] ) ) {
+						$package = (string) $asset['url'];
+					}
 					break;
 				}
 			}
@@ -974,432 +979,486 @@ class Arcos_Static_Sites {
 			'order'          => 'ASC',
 		] );
 		$home_root = trailingslashit( home_url( '/' ) );
-		?>
-		<div class="wrap" style="max-width: 920px;">
-			<h1>Arcos Static Sites <span style="font-size:13px;font-weight:500;color:#64748b;">v<?php echo esc_html( self::VERSION ); ?> &bull; Arcos Multimedia Group</span></h1>
-			<p>Export published pages and assets into a self-contained static <code>.zip</code> or push directly to a same-server live folder with incremental delta builds.</p>
-
-			<div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:14px 18px;margin-top:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;">
-				<div>
-					<?php if ( $has_manifest ) : ?>
-						<strong>Last Export:</strong> <?php echo esc_html( $manifest['last_export'] ); ?> UTC
-						&nbsp;|&nbsp; <strong>Tracked Pages:</strong> <?php echo esc_html( count( $manifest['pages'] ?? [] ) ); ?>
-						&nbsp;|&nbsp; <strong>Tracked Assets:</strong> <?php echo esc_html( count( $manifest['assets'] ?? [] ) ); ?>
-					<?php else : ?>
-						<strong>Manifest:</strong> No baseline export recorded yet. Run a <em>Full Export</em> first to enable fast Incremental Delta exports.
-					<?php endif; ?>
-				</div>
-				<?php if ( $has_manifest ) : ?>
-					<button type="button" id="arcos-reset-manifest" class="button button-small">Reset Manifest</button>
-				<?php endif; ?>
-			</div>
-
-			<?php
-			$env_checks = self::get_environment_checks();
-			$env_fails  = 0;
-			$env_warns  = 0;
-			foreach ( $env_checks as $c ) {
-				if ( 'fail' === $c['status'] ) {
-					$env_fails++;
-				} elseif ( 'warn' === $c['status'] ) {
-					$env_warns++;
-				}
+		$env_checks = self::get_environment_checks();
+		$env_fails  = 0;
+		$env_warns  = 0;
+		foreach ( $env_checks as $c ) {
+			if ( 'fail' === $c['status'] ) {
+				$env_fails++;
+			} elseif ( 'warn' === $c['status'] ) {
+				$env_warns++;
 			}
-			$env_ok_count = count( $env_checks ) - $env_fails - $env_warns;
-			$env_badge_bg = $env_fails > 0 ? '#fee2e2' : ( $env_warns > 0 ? '#fef3c7' : '#dcfce7' );
-			$env_badge_fg = $env_fails > 0 ? '#991b1b' : ( $env_warns > 0 ? '#92400e' : '#166534' );
-			$env_summary  = $env_fails > 0
-				? $env_fails . ' Action Needed' . ( $env_warns > 0 ? ', ' . $env_warns . ' Warning' : '' )
-				: ( $env_warns > 0 ? $env_warns . ' Recommended Tweak' . ( $env_warns > 1 ? 's' : '' ) : 'All ' . $env_ok_count . ' Checks Passed' );
-			?>
-			<details style="background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:12px 18px;margin-top:12px;" <?php echo $env_fails > 0 ? 'open' : ''; ?>>
-				<summary style="cursor:pointer;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:10px;list-style:none;">
-					<span>Server &amp; PHP Readiness Checklist</span>
-					<span style="font-size:12px;padding:2px 10px;border-radius:999px;background:<?php echo esc_attr( $env_badge_bg ); ?>;color:<?php echo esc_attr( $env_badge_fg ); ?>;">
-						<?php echo esc_html( $env_summary ); ?>
-					</span>
-				</summary>
-				<table class="widefat striped" style="margin-top:12px;">
-					<thead>
-						<tr>
-							<th>Check</th>
-							<th>Current</th>
-							<th>Recommended</th>
-							<th>Status</th>
-						</tr>
-					</thead>
-					<tbody>
-						<?php foreach ( $env_checks as $c ) :
-							$st_color = 'ok' === $c['status'] ? '#15803d' : ( 'warn' === $c['status'] ? '#b45309' : '#b91c1c' );
-							$st_label = 'ok' === $c['status'] ? '✓ OK' : ( 'warn' === $c['status'] ? '⚠ Tweak' : '✕ Action Needed' );
-						?>
-							<tr>
-								<td><strong><?php echo esc_html( $c['label'] ); ?></strong></td>
-								<td><code><?php echo esc_html( $c['current'] ); ?></code></td>
-								<td><?php echo esc_html( $c['target'] ); ?></td>
-								<td>
-									<strong style="color:<?php echo esc_attr( $st_color ); ?>;"><?php echo esc_html( $st_label ); ?></strong>
-									<?php if ( '' !== $c['tip'] ) : ?>
-										<div style="font-size:12px;color:#475569;margin-top:2px;"><?php echo esc_html( $c['tip'] ); ?></div>
-									<?php endif; ?>
-								</td>
-							</tr>
-						<?php endforeach; ?>
-					</tbody>
-				</table>
-			</details>
-
-			<div style="background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:20px 24px;margin-top:16px;">
-				<h2 style="margin-top:0;">Export Settings</h2>
-				<table class="form-table" role="presentation">
-					<tr>
-						<th scope="row"><label for="arcos-release-label">Release Label (Optional)</label></th>
-						<td>
-							<input type="text" id="arcos-release-label" value="" class="regular-text" placeholder="e.g. Before header redesign, SEO updates" />
-							<p class="description">Tag this export/release so you can easily identify it later for rollback.</p>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row">Export Mode</th>
-						<td>
-							<label style="display:block;margin-bottom:6px;">
-								<input type="radio" name="arcos_mode" value="full" <?php checked( ! $has_manifest ); ?> />
-								<strong>Full Export</strong> — Export all published pages &amp; assets (sets baseline manifest)
-							</label>
-							<label style="display:block;margin-bottom:6px;">
-								<input type="radio" name="arcos_mode" value="incremental" <?php checked( $has_manifest ); ?> />
-								<strong>Incremental Export (Changes Only)</strong> — Export only pages &amp; assets modified since last export
-							</label>
-							<label style="display:block;margin-bottom:8px;">
-								<input type="radio" name="arcos_mode" value="selected" />
-								<strong>Selected Pages Only</strong> — Pick specific pages or posts from the list below
-							</label>
-							<div id="arcos-selected-wrap" style="display:none;margin-left:22px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;">
-								<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
-									<input type="text" id="arcos-page-filter" class="regular-text" placeholder="Search pages by title, slug, or type..." style="flex:1;min-width:220px;" />
-									<button type="button" id="arcos-sel-all" class="button button-small">Select Visible</button>
-									<button type="button" id="arcos-sel-clear" class="button button-small">Clear</button>
-									<span id="arcos-sel-count" style="font-size:12px;color:#475569;font-weight:600;">0 selected</span>
-								</div>
-								<div id="arcos-pages-picker" style="max-height:220px;overflow-y:auto;background:#fff;border:1px solid #cbd5e1;border-radius:4px;padding:6px 10px;">
-									<?php foreach ( $picker_posts as $pp ) :
-										$rel_slug = '/' . ltrim( str_replace( $home_root, '', (string) get_permalink( $pp->ID ) ), '/' );
-										$search_hay = strtolower( $pp->post_type . ' ' . $pp->post_title . ' ' . $rel_slug . ' ' . $pp->ID );
-										?>
-										<label class="arcos-pick-row" data-search="<?php echo esc_attr( $search_hay ); ?>" style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #f1f5f9;">
-											<input type="checkbox" class="arcos-pick-cb" value="<?php echo esc_attr( $pp->ID ); ?>" />
-											<span style="font-size:11px;text-transform:uppercase;background:#e2e8f0;color:#334155;padding:1px 6px;border-radius:4px;font-weight:700;"><?php echo esc_html( $pp->post_type ); ?></span>
-											<strong><?php echo esc_html( $pp->post_title ?: '(no title)' ); ?></strong>
-											<span style="color:#64748b;font-size:12px;"><?php echo esc_html( $rel_slug ); ?></span>
-										</label>
-									<?php endforeach; ?>
-								</div>
-							</div>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row">Delivery Destination</th>
-						<td>
-							<label style="display:block;margin-bottom:6px;">
-								<input type="radio" name="arcos_delivery" value="zip" <?php checked( $settings['delivery_method'], 'zip' ); ?> />
-								<strong>Static ZIP Only</strong> — Package a downloadable <code>.zip</code> archive
-							</label>
-							<label style="display:block;margin-bottom:6px;">
-								<input type="radio" name="arcos_delivery" value="push" <?php checked( $settings['delivery_method'], 'push' ); ?> />
-								<strong>Push Directly to Server Folder</strong> — Copy files straight into the live static directory on this server (no ZIP download/unzip needed)
-							</label>
-							<label style="display:block;margin-bottom:6px;">
-								<input type="radio" name="arcos_delivery" value="both" <?php checked( $settings['delivery_method'], 'both' ); ?> />
-								<strong>Both</strong> — Push directly to server folder AND keep a downloadable <code>.zip</code> backup
-							</label>
-							<label style="display:block;margin-bottom:6px;">
-								<input type="radio" name="arcos_delivery" value="ftp" <?php checked( $settings['delivery_method'], 'ftp' ); ?> />
-								<strong>Push via FTP / FTPS</strong> — Upload static files directly to a remote FTP/FTPS server
-							</label>
-							<label style="display:block;margin-bottom:8px;">
-								<input type="radio" name="arcos_delivery" value="zip_ftp" <?php checked( $settings['delivery_method'], 'zip_ftp' ); ?> />
-								<strong>Both (ZIP + FTP / FTPS)</strong> — Save a downloadable <code>.zip</code> backup AND upload via FTP/FTPS
-							</label>
-
-							<div id="arcos-target-dir-wrap" style="<?php echo in_array( $settings['delivery_method'], [ 'push', 'both' ], true ) ? '' : 'display:none;'; ?>margin-top:10px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;">
-								<label for="arcos-dir-select"><strong>Detected Server Folders:</strong></label><br />
-								<select id="arcos-dir-select" class="regular-text" style="margin-top:4px;max-width:100%;width:100%;">
-									<option value="">— Select a detected folder or enter custom path below —</option>
-									<?php foreach ( $detected_folders as $df ) : ?>
-										<option value="<?php echo esc_attr( $df ); ?>" <?php selected( $settings['target_dir'], $df ); ?>><?php echo esc_html( $df ); ?></option>
-									<?php endforeach; ?>
-									<option value="__custom__" <?php selected( ! empty( $settings['target_dir'] ) && ! in_array( $settings['target_dir'], $detected_folders, true ) ); ?>>Custom path...</option>
-								</select>
-								<div style="margin-top:8px;">
-									<label for="arcos-target-dir"><strong>Target Live Server Directory Path:</strong></label><br />
-									<input type="text" id="arcos-target-dir" value="<?php echo esc_attr( $settings['target_dir'] ); ?>" class="large-text" placeholder="e.g. <?php echo esc_attr( $parent_hint ); ?>public_html" style="margin-top:4px;" />
-								</div>
-								<p style="margin:8px 0 4px;">
-									<button type="button" id="arcos-check-dir-btn" class="button button-secondary button-small">Verify Folder</button>
-									<span id="arcos-dir-status" style="margin-left:8px;font-weight:600;"></span>
-								</p>
-								<p class="description">Current WordPress path: <code><?php echo esc_html( untrailingslashit( ABSPATH ) ); ?></code>. Pick a detected folder above or type a custom path.</p>
-							</div>
-
-							<div id="arcos-ftp-wrap" style="<?php echo in_array( $settings['delivery_method'], [ 'ftp', 'zip_ftp' ], true ) ? '' : 'display:none;'; ?>margin-top:10px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;">
-								<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:8px;">
-									<div>
-										<label for="arcos-ftp-host"><strong>FTP Host:</strong></label><br />
-										<input type="text" id="arcos-ftp-host" value="<?php echo esc_attr( $settings['ftp_host'] ); ?>" class="regular-text" style="width:100%;margin-top:4px;" placeholder="e.g. ftp.example.com" />
-									</div>
-									<div>
-										<label for="arcos-ftp-port"><strong>Port:</strong></label><br />
-										<input type="number" id="arcos-ftp-port" value="<?php echo esc_attr( (string) $settings['ftp_port'] ); ?>" min="1" max="65535" style="width:100%;margin-top:4px;" />
-									</div>
-								</div>
-								<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
-									<div>
-										<label for="arcos-ftp-user"><strong>Username:</strong></label><br />
-										<input type="text" id="arcos-ftp-user" value="<?php echo esc_attr( $settings['ftp_user'] ); ?>" class="regular-text" style="width:100%;margin-top:4px;" autocomplete="off" />
-									</div>
-									<div>
-										<label for="arcos-ftp-pass"><strong>Password:</strong></label><br />
-										<input type="password" id="arcos-ftp-pass" value="" class="regular-text" style="width:100%;margin-top:4px;" autocomplete="new-password" placeholder="<?php echo ! empty( $settings['ftp_pass'] ) ? '•••••••• (saved — leave blank to keep)' : 'FTP password'; ?>" />
-									</div>
-								</div>
-								<div style="margin-bottom:8px;">
-									<label for="arcos-ftp-path"><strong>Remote Directory Path:</strong></label><br />
-									<input type="text" id="arcos-ftp-path" value="<?php echo esc_attr( $settings['ftp_path'] ); ?>" class="large-text" style="margin-top:4px;" placeholder="e.g. /public_html/" />
-								</div>
-								<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;">
-									<label><input type="checkbox" id="arcos-ftp-ssl" <?php checked( ! empty( $settings['ftp_ssl'] ) ); ?> /> Use FTPS (SSL/TLS)</label>
-									<label><input type="checkbox" id="arcos-ftp-passive" <?php checked( ! empty( $settings['ftp_passive'] ) ); ?> /> Passive Mode (PASV, recommended)</label>
-								</div>
-								<p style="margin:8px 0 0;">
-									<button type="button" id="arcos-test-ftp-btn" class="button button-secondary button-small">Test FTP Connection</button>
-									<span id="arcos-ftp-status" style="margin-left:8px;font-weight:600;"></span>
-								</p>
-							</div>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><label for="arcos-base-url">Target Base Path / URL</label></th>
-						<td>
-							<input type="text" id="arcos-base-url" value="<?php echo esc_attr( $settings['base_url'] ); ?>" class="regular-text" />
-							<p class="description">Use <code>/</code> for root-relative hosting or <code>http://localhost:8080/</code>, or enter a full URL like <code>https://example.com/</code>.</p>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row">SEO &amp; GEO (SEOPress)</th>
-						<td>
-							<label for="arcos-canonical-domain"><strong>Production Domain for Canonicals &amp; Schema (Optional):</strong></label><br />
-							<input type="url" id="arcos-canonical-domain" value="<?php echo esc_attr( $settings['canonical_domain'] ); ?>" class="regular-text" placeholder="e.g. https://austintrs.com" style="margin:4px 0 8px;" />
-							<p class="description" style="margin-bottom:10px;">When set, <code>&lt;link rel="canonical"&gt;</code>, <code>og:url</code>, JSON-LD schema, and <code>sitemap.xml</code> use this full domain even when asset paths are <code>/</code>.</p>
-							<label style="display:block;margin-bottom:6px;">
-								<input type="checkbox" id="arcos-force-index" <?php checked( ! empty( $settings['force_index'] ) ); ?> />
-								<strong>Strip global <code>noindex</code></strong> — Output <code>index, follow</code> on exported pages even if WordPress CMS has &ldquo;Discourage search engines&rdquo; enabled (preserves per-page SEOPress <code>noindex</code> like Thank You pages)
-							</label>
-							<label style="display:block;margin-bottom:10px;">
-								<input type="checkbox" id="arcos-gen-seo-files" <?php checked( ! empty( $settings['generate_seo_files'] ) ); ?> />
-								<strong>Generate <code>sitemap.xml</code>, <code>robots.txt</code> &amp; <code>llms.txt</code></strong> (uses SEOPress PRO <code>llms.txt</code> template if configured)
-							</label>
-							<label style="display:block;margin-bottom:10px;">
-								<input type="checkbox" id="arcos-gen-htaccess" <?php checked( ! empty( $settings['generate_htaccess'] ) ); ?> />
-								<strong>Generate Optimized <code>.htaccess</code> (Caching &amp; Gzip)</strong> — Adds 1-year browser cache headers for static assets &amp; Gzip compression (Apache/LiteSpeed)
-							</label>
-							<label for="arcos-ga4-id"><strong>Google Tag / GA4 / GTM ID (Optional):</strong></label><br />
-							<input type="text" id="arcos-ga4-id" value="<?php echo esc_attr( $settings['ga4_id'] ); ?>" class="regular-text" placeholder="e.g. GT-PHRS7VL, G-XXXXXXXXXX, or GTM-XXXXXXX" style="margin-top:4px;" />
-							<p class="description">Supports <code>G-</code>, <code>GT-</code>, <code>AW-</code> (<code>gtag.js</code>) and <code>GTM-</code> (Google Tag Manager). Leave blank to keep existing page tags.</p>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row">Post Types to Export</th>
-						<td>
-							<?php foreach ( $post_types as $pt ) : ?>
-								<label style="display:inline-block;margin-right:16px;">
-									<input type="checkbox" class="arcos-pt" value="<?php echo esc_attr( $pt->name ); ?>" checked />
-									<?php echo esc_html( $pt->labels->name ); ?> (<code><?php echo esc_html( $pt->name ); ?></code>)
-								</label>
-							<?php endforeach; ?>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row">Clean Assets &amp; Speed</th>
-						<td>
-							<label style="display:block;margin-bottom:8px;">
-								<input type="checkbox" id="arcos-pagespeed-off" <?php checked( ! empty( $settings['pagespeed_off'] ) ); ?> />
-								Append <code>?PageSpeed=off</code> when rendering pages (recommended on hosts using mod_pagespeed)
-							</label>
-							<label for="arcos-batch-size"><strong>Pages per Batch:</strong></label>
-							<select id="arcos-batch-size" style="margin-left:6px;">
-								<option value="2" <?php selected( (int) $settings['batch_size'], 2 ); ?>>2 (Slow / shared servers)</option>
-								<option value="4" <?php selected( (int) $settings['batch_size'], 4 ); ?>>4 (Recommended)</option>
-								<option value="8" <?php selected( (int) $settings['batch_size'], 8 ); ?>>8 (Fast servers)</option>
-							</select>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row">Bricks Form Bridge</th>
-						<td>
-							<label style="display:block;margin-bottom:8px;">
-								<input type="checkbox" id="arcos-form-bridge" <?php checked( ! empty( $settings['enable_form_bridge'] ) ); ?> />
-								Inject AJAX bridge so Bricks forms submit through WordPress (<code><?php echo esc_html( $rest_url ); ?></code>), resolve dynamic tags, and save submissions
-							</label>
-							<label for="arcos-allowed-origins"><strong>Allowed CORS Origins:</strong></label><br />
-							<input type="text" id="arcos-allowed-origins" value="<?php echo esc_attr( $settings['allowed_origins'] ); ?>" class="regular-text" />
-						</td>
-					</tr>
-					<tr>
-						<th scope="row">Private CMS Mode</th>
-						<td>
-							<label style="display:block;margin-bottom:6px;">
-								<input type="checkbox" id="arcos-private-cms" <?php checked( ! empty( $settings['private_cms_mode'] ) ); ?> />
-								<strong>Lock WordPress frontend</strong> — Redirect logged-out public visitors to <code>wp-login.php</code> (REST form endpoint &amp; internal static exports bypass automatically)
-							</label>
-							<span id="arcos-lock-status" style="font-size:12px;font-weight:600;color:#475569;"></span>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row">GitHub Plugin Updates</th>
-						<td>
-							<?php
-							$has_const_token = defined( 'ARCOS_STATIC_SITES_GITHUB_TOKEN' ) && is_string( ARCOS_STATIC_SITES_GITHUB_TOKEN ) && '' !== trim( ARCOS_STATIC_SITES_GITHUB_TOKEN );
-							$has_saved_token = ! empty( $settings['github_token'] );
-							?>
-							<?php if ( $has_const_token ) : ?>
-								<p class="description" style="margin-bottom:8px;">Authenticated via <code>ARCOS_STATIC_SITES_GITHUB_TOKEN</code> in <code>wp-config.php</code>.</p>
-							<?php else : ?>
-								<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
-									<input type="password" id="arcos-github-token" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo $has_saved_token ? '•••••••••••••••• (token saved — enter new to replace)' : 'github_pat_... (fine-grained token with Contents: Read)'; ?>" />
-									<button type="button" id="arcos-save-token" class="button">Save Token</button>
-									<?php if ( $has_saved_token ) : ?>
-										<button type="button" id="arcos-clear-token" class="button">Clear</button>
-									<?php endif; ?>
-								</div>
-								<p class="description" style="margin-bottom:8px;">Private repo: <code><?php echo esc_html( self::GITHUB_REPO ); ?></code>. Create a fine-grained GitHub PAT with <strong>Contents: Read-only</strong> access to this repository.</p>
-							<?php endif; ?>
-							<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-								<button type="button" id="arcos-check-updates" class="button">Check for Updates Now</button>
-								<span id="arcos-update-status" style="font-size:12px;font-weight:600;color:#475569;"></span>
-							</div>
-						</td>
-					</tr>
-				</table>
-
-				<p style="margin-top:16px;">
-					<button type="button" id="arcos-start-btn" class="button button-primary button-hero">Run Static Export</button>
-					<button type="button" id="arcos-cancel-btn" class="button button-secondary button-hero" style="display:none;margin-left:8px;">Cancel Export</button>
-				</p>
-
-				<div id="arcos-progress-wrap" style="display:none;margin-top:18px;">
-					<div style="background:#e2e8f0;border-radius:999px;height:14px;overflow:hidden;">
-						<div id="arcos-progress-bar" style="width:0%;height:100%;background:#2563eb;transition:width .25s ease;"></div>
-					</div>
-					<p id="arcos-status-text" style="font-weight:600;margin:8px 0;"></p>
-					<pre id="arcos-log" style="background:#0f172a;color:#e2e8f0;padding:12px 14px;border-radius:6px;max-height:220px;overflow:auto;font-size:12px;"></pre>
+		}
+		$env_ok_count = count( $env_checks ) - $env_fails - $env_warns;
+		$env_badge_bg = $env_fails > 0 ? '#fee2e2' : ( $env_warns > 0 ? '#fef3c7' : '#dcfce7' );
+		$env_badge_fg = $env_fails > 0 ? '#991b1b' : ( $env_warns > 0 ? '#92400e' : '#166534' );
+		$env_summary  = $env_fails > 0
+			? $env_fails . ' Action Needed' . ( $env_warns > 0 ? ', ' . $env_warns . ' Warning' : '' )
+			: ( $env_warns > 0 ? $env_warns . ' Tweak' . ( $env_warns > 1 ? 's' : '' ) : 'All ' . $env_ok_count . ' Passed' );
+		$export_logs = self::get_export_logs();
+		$logs_dir    = self::get_logs_dir();
+		?>
+		<style>
+			.arcos-dash { max-width: 1020px; margin-top: 16px; }
+			.arcos-header { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #f8fafc; border-radius: 12px; padding: 20px 24px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; box-shadow: 0 4px 16px rgba(15, 23, 42, 0.12); }
+			.arcos-header h1 { color: #fff; margin: 0 0 4px; font-size: 22px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+			.arcos-ver-pill { font-size: 11px; font-weight: 600; background: rgba(59, 130, 246, 0.22); color: #93c5fd; border: 1px solid rgba(147, 197, 253, 0.3); padding: 2px 9px; border-radius: 999px; }
+			.arcos-header p { margin: 0; color: #cbd5e1; font-size: 13px; }
+			.arcos-header-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+			.arcos-stat-pill { background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px; padding: 6px 12px; font-size: 12px; color: #e2e8f0; }
+			.arcos-stat-pill strong { color: #fff; }
+			.arcos-tabs { display: flex; gap: 6px; margin: 16px 0 0; border-bottom: 1px solid #cbd5e1; padding: 0 4px; flex-wrap: wrap; }
+			.arcos-tab-btn { background: transparent; border: 1px solid transparent; border-bottom: none; border-radius: 8px 8px 0 0; padding: 10px 16px; font-size: 13px; font-weight: 600; color: #475569; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; margin-bottom: -1px; transition: all .15s ease; }
+			.arcos-tab-btn:hover { color: #0f172a; background: #f1f5f9; }
+			.arcos-tab-btn.is-active { background: #fff; color: #1d4ed8; border-color: #cbd5e1; border-bottom-color: #fff; }
+			.arcos-tab-count { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: #e2e8f0; color: #334155; }
+			.arcos-tab-btn.is-active .arcos-tab-count { background: #dbeafe; color: #1d4ed8; }
+			.arcos-tab-panel { display: none; }
+			.arcos-tab-panel.is-active { display: block; }
+			.arcos-card { background: #fff; border: 1px solid #cbd5e1; border-top: none; border-radius: 0 0 10px 10px; padding: 22px 24px; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04); }
+			.arcos-card-standalone { background: #fff; border: 1px solid #cbd5e1; border-radius: 10px; padding: 20px 24px; margin-top: 16px; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04); }
+			.arcos-card h2, .arcos-card-standalone h2 { margin: 0 0 12px; font-size: 16px; color: #0f172a; }
+			.arcos-dash .form-table th { width: 210px; padding-top: 16px; color: #1e293b; }
+			.arcos-dash .form-table td { padding-top: 14px; }
+			.arcos-dash .form-table tr { border-bottom: 1px solid #f1f5f9; }
+			.arcos-dash .form-table tr:last-child { border-bottom: none; }
+			.arcos-subbox { margin-top: 10px; padding: 14px 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }
+			.arcos-action-bar { margin-top: 18px; padding-top: 16px; border-top: 1px solid #e2e8f0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+		</style>
+		<div class="wrap arcos-dash">
+			<div class="arcos-header">
+				<div>
+					<h1>Arcos Static Sites <span class="arcos-ver-pill">v<?php echo esc_html( self::VERSION ); ?></span></h1>
+					<p>Export published WordPress &amp; Bricks pages into static ZIPs, local folders, or remote FTP/FTPS servers.</p>
 				</div>
-			</div>
-
-			<div style="background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:20px 24px;margin-top:20px;">
-				<h2 style="margin-top:0;">Generated Static Archives</h2>
-				<table class="widefat striped" id="arcos-zips-table">
-					<thead>
-						<tr>
-							<th>Label</th>
-							<th>Archive</th>
-							<th>Size</th>
-							<th>Created</th>
-							<th>Actions</th>
-						</tr>
-					</thead>
-					<tbody>
-						<?php if ( empty( $zips ) ) : ?>
-							<tr id="arcos-empty-row"><td colspan="5">No static exports generated yet.</td></tr>
-						<?php else : ?>
-							<?php foreach ( $zips as $zip_path ) :
-								$fname = basename( $zip_path );
-								$url   = trailingslashit( $storage_url ) . rawurlencode( $fname );
-								$size  = size_format( filesize( $zip_path ), 2 );
-								$mtime = date_i18n( 'Y-m-d H:i:s', filemtime( $zip_path ) );
-								$rel_meta = $releases[ $fname ] ?? [];
-								$r_label  = is_array( $rel_meta ) && ! empty( $rel_meta['label'] ) ? (string) $rel_meta['label'] : '';
-								?>
-								<tr>
-									<td>
-										<span class="arcos-rel-label-text"><?php echo $r_label ? esc_html( $r_label ) : '<em style="color:#94a3b8;">No label</em>'; ?></span>
-										<button type="button" class="button-link arcos-edit-label" data-file="<?php echo esc_attr( $fname ); ?>" data-label="<?php echo esc_attr( $r_label ); ?>" style="margin-left:6px;font-size:12px;">Edit</button>
-									</td>
-									<td><code><?php echo esc_html( $fname ); ?></code></td>
-									<td><?php echo esc_html( $size ); ?></td>
-									<td><?php echo esc_html( $mtime ); ?></td>
-									<td>
-										<a href="<?php echo esc_url( $url ); ?>" class="button button-primary button-small" download>Download ZIP</a>
-										<button type="button" class="button button-secondary button-small arcos-restore-zip" data-file="<?php echo esc_attr( $fname ); ?>">Push / Restore to Folder</button>
-										<button type="button" class="button button-small arcos-del-zip" data-file="<?php echo esc_attr( $fname ); ?>">Delete</button>
-									</td>
-								</tr>
-							<?php endforeach; ?>
-						<?php endif; ?>
-					</tbody>
-				</table>
-			</div>
-
-			<?php
-			$export_logs = self::get_export_logs();
-			$logs_dir    = self::get_logs_dir();
-			?>
-			<div style="background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:20px 24px;margin-top:20px;">
-				<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
-					<h2 style="margin:0;">Export Logs</h2>
-					<?php if ( ! empty( $export_logs ) ) : ?>
-						<button type="button" id="arcos-clear-logs" class="button button-small">Clear All Logs</button>
+				<div class="arcos-header-meta">
+					<?php if ( $has_manifest ) : ?>
+						<div class="arcos-stat-pill"><strong>Last Export:</strong> <?php echo esc_html( $manifest['last_export'] ); ?> UTC</div>
+						<div class="arcos-stat-pill"><strong>Pages:</strong> <?php echo esc_html( count( $manifest['pages'] ?? [] ) ); ?> &bull; <strong>Assets:</strong> <?php echo esc_html( count( $manifest['assets'] ?? [] ) ); ?></div>
+						<button type="button" id="arcos-reset-manifest" class="button button-small">Reset Manifest</button>
+					<?php else : ?>
+						<div class="arcos-stat-pill">No baseline export yet (run <strong>Full Export</strong> first)</div>
 					<?php endif; ?>
 				</div>
-				<table class="widefat striped" id="arcos-logs-table">
-					<thead>
+			</div>
+
+			<div class="arcos-tabs" role="tablist">
+				<button type="button" class="arcos-tab-btn is-active" data-tab="export" role="tab">Export &amp; Delivery</button>
+				<button type="button" class="arcos-tab-btn" data-tab="settings" role="tab">SEO, Forms &amp; Security</button>
+				<button type="button" class="arcos-tab-btn" data-tab="archives" role="tab">Releases &amp; Archives <span class="arcos-tab-count"><?php echo esc_html( count( $zips ) ); ?></span></button>
+				<button type="button" class="arcos-tab-btn" data-tab="logs" role="tab">Export Logs <span class="arcos-tab-count"><?php echo esc_html( count( $export_logs ) ); ?></span></button>
+				<button type="button" class="arcos-tab-btn" data-tab="system" role="tab">
+					System &amp; Updates
+					<span class="arcos-tab-count" style="background:<?php echo esc_attr( $env_badge_bg ); ?>;color:<?php echo esc_attr( $env_badge_fg ); ?>;"><?php echo esc_html( $env_summary ); ?></span>
+				</button>
+			</div>
+
+			<!-- TAB 1: EXPORT & DELIVERY -->
+			<div class="arcos-tab-panel is-active" data-tab-panel="export">
+				<div class="arcos-card">
+					<table class="form-table" role="presentation">
 						<tr>
-							<th>Date (UTC)</th>
-							<th>Mode / Delivery</th>
-							<th>Label</th>
-							<th>Pages</th>
-							<th>Status</th>
-							<th>Size</th>
-							<th>Actions</th>
+							<th scope="row"><label for="arcos-release-label">Release Label (Optional)</label></th>
+							<td>
+								<input type="text" id="arcos-release-label" value="" class="regular-text" placeholder="e.g. Before header redesign, SEO updates" />
+								<p class="description">Tag this export/release so you can easily identify it later for rollback.</p>
+							</td>
 						</tr>
-					</thead>
-					<tbody>
-						<?php if ( empty( $export_logs ) ) : ?>
-							<tr><td colspan="7">No export logs recorded yet.</td></tr>
-						<?php else : ?>
-							<?php foreach ( $export_logs as $lg ) :
-								$lid      = (string) ( $lg['id'] ?? '' );
-								$lfile    = $logs_dir . '/export-' . sanitize_file_name( $lid ) . '.log';
-								$lsize    = file_exists( $lfile ) ? size_format( filesize( $lfile ), 1 ) : '—';
-								$lstatus  = (string) ( $lg['status'] ?? 'running' );
-								$st_bg    = 'completed' === $lstatus ? '#dcfce7' : ( 'failed' === $lstatus ? '#fee2e2' : ( 'cancelled' === $lstatus ? '#fef3c7' : ( 'no_changes' === $lstatus ? '#f1f5f9' : '#dbeafe' ) ) );
-								$st_fg    = 'completed' === $lstatus ? '#166534' : ( 'failed' === $lstatus ? '#991b1b' : ( 'cancelled' === $lstatus ? '#92400e' : ( 'no_changes' === $lstatus ? '#475569' : '#1e40af' ) ) );
-								$dl_url   = add_query_arg( [
-									'action' => 'arcos_ss_download_log',
-									'nonce'  => $nonce,
-									'id'     => $lid,
-								], admin_url( 'admin-ajax.php' ) );
-								?>
-								<tr data-log-id="<?php echo esc_attr( $lid ); ?>">
-									<td><?php echo esc_html( $lg['created_at'] ?? '' ); ?></td>
-									<td><code><?php echo esc_html( ( $lg['mode'] ?? '' ) . ' / ' . ( $lg['delivery'] ?? '' ) ); ?></code></td>
-									<td><?php echo ! empty( $lg['label'] ) ? esc_html( $lg['label'] ) : '<em style="color:#94a3b8;">—</em>'; ?></td>
-									<td><?php echo esc_html( (string) ( $lg['total'] ?? 0 ) ); ?></td>
+						<tr>
+							<th scope="row">Export Mode</th>
+							<td>
+								<label style="display:block;margin-bottom:6px;">
+									<input type="radio" name="arcos_mode" value="full" <?php checked( ! $has_manifest ); ?> />
+									<strong>Full Export</strong> — Export all published pages &amp; assets (sets baseline manifest)
+								</label>
+								<label style="display:block;margin-bottom:6px;">
+									<input type="radio" name="arcos_mode" value="incremental" <?php checked( $has_manifest ); ?> />
+									<strong>Incremental Export (Changes Only)</strong> — Export only pages &amp; assets modified since last export
+								</label>
+								<label style="display:block;margin-bottom:8px;">
+									<input type="radio" name="arcos_mode" value="selected" />
+									<strong>Selected Pages Only</strong> — Pick specific pages or posts from the list below
+								</label>
+								<div id="arcos-selected-wrap" class="arcos-subbox" style="display:none;margin-left:22px;">
+									<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+										<input type="text" id="arcos-page-filter" class="regular-text" placeholder="Search pages by title, slug, or type..." style="flex:1;min-width:220px;" />
+										<button type="button" id="arcos-sel-all" class="button button-small">Select Visible</button>
+										<button type="button" id="arcos-sel-clear" class="button button-small">Clear</button>
+										<span id="arcos-sel-count" style="font-size:12px;color:#475569;font-weight:600;">0 selected</span>
+									</div>
+									<div id="arcos-pages-picker" style="max-height:220px;overflow-y:auto;background:#fff;border:1px solid #cbd5e1;border-radius:4px;padding:6px 10px;">
+										<?php foreach ( $picker_posts as $pp ) :
+											$rel_slug = '/' . ltrim( str_replace( $home_root, '', (string) get_permalink( $pp->ID ) ), '/' );
+											$search_hay = strtolower( $pp->post_type . ' ' . $pp->post_title . ' ' . $rel_slug . ' ' . $pp->ID );
+											?>
+											<label class="arcos-pick-row" data-search="<?php echo esc_attr( $search_hay ); ?>" style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #f1f5f9;">
+												<input type="checkbox" class="arcos-pick-cb" value="<?php echo esc_attr( $pp->ID ); ?>" />
+												<span style="font-size:11px;text-transform:uppercase;background:#e2e8f0;color:#334155;padding:1px 6px;border-radius:4px;font-weight:700;"><?php echo esc_html( $pp->post_type ); ?></span>
+												<strong><?php echo esc_html( $pp->post_title ?: '(no title)' ); ?></strong>
+												<span style="color:#64748b;font-size:12px;"><?php echo esc_html( $rel_slug ); ?></span>
+											</label>
+										<?php endforeach; ?>
+									</div>
+								</div>
+							</td>
+						</tr>
+						<tr>
+							<th scope="row">Delivery Destination</th>
+							<td>
+								<label style="display:block;margin-bottom:6px;">
+									<input type="radio" name="arcos_delivery" value="zip" <?php checked( $settings['delivery_method'], 'zip' ); ?> />
+									<strong>Static ZIP Only</strong> — Package a downloadable <code>.zip</code> archive
+								</label>
+								<label style="display:block;margin-bottom:6px;">
+									<input type="radio" name="arcos_delivery" value="push" <?php checked( $settings['delivery_method'], 'push' ); ?> />
+									<strong>Push Directly to Server Folder</strong> — Copy files straight into the live static directory on this server (no ZIP download/unzip needed)
+								</label>
+								<label style="display:block;margin-bottom:6px;">
+									<input type="radio" name="arcos_delivery" value="both" <?php checked( $settings['delivery_method'], 'both' ); ?> />
+									<strong>Both</strong> — Push directly to server folder AND keep a downloadable <code>.zip</code> backup
+								</label>
+								<label style="display:block;margin-bottom:6px;">
+									<input type="radio" name="arcos_delivery" value="ftp" <?php checked( $settings['delivery_method'], 'ftp' ); ?> />
+									<strong>Push via FTP / FTPS</strong> — Upload static files directly to a remote FTP/FTPS server
+								</label>
+								<label style="display:block;margin-bottom:8px;">
+									<input type="radio" name="arcos_delivery" value="zip_ftp" <?php checked( $settings['delivery_method'], 'zip_ftp' ); ?> />
+									<strong>Both (ZIP + FTP / FTPS)</strong> — Save a downloadable <code>.zip</code> backup AND upload via FTP/FTPS
+								</label>
+
+								<div id="arcos-target-dir-wrap" class="arcos-subbox" style="<?php echo in_array( $settings['delivery_method'], [ 'push', 'both' ], true ) ? '' : 'display:none;'; ?>">
+									<label for="arcos-dir-select"><strong>Detected Server Folders:</strong></label><br />
+									<select id="arcos-dir-select" class="regular-text" style="margin-top:4px;max-width:100%;width:100%;">
+										<option value="">— Select a detected folder or enter custom path below —</option>
+										<?php foreach ( $detected_folders as $df ) : ?>
+											<option value="<?php echo esc_attr( $df ); ?>" <?php selected( $settings['target_dir'], $df ); ?>><?php echo esc_html( $df ); ?></option>
+										<?php endforeach; ?>
+										<option value="__custom__" <?php selected( ! empty( $settings['target_dir'] ) && ! in_array( $settings['target_dir'], $detected_folders, true ) ); ?>>Custom path...</option>
+									</select>
+									<div style="margin-top:8px;">
+										<label for="arcos-target-dir"><strong>Target Live Server Directory Path:</strong></label><br />
+										<input type="text" id="arcos-target-dir" value="<?php echo esc_attr( $settings['target_dir'] ); ?>" class="large-text" placeholder="e.g. <?php echo esc_attr( $parent_hint ); ?>public_html" style="margin-top:4px;" />
+									</div>
+									<p style="margin:8px 0 4px;">
+										<button type="button" id="arcos-check-dir-btn" class="button button-secondary button-small">Verify Folder</button>
+										<span id="arcos-dir-status" style="margin-left:8px;font-weight:600;"></span>
+									</p>
+									<p class="description">Current WordPress path: <code><?php echo esc_html( untrailingslashit( ABSPATH ) ); ?></code>. Pick a detected folder above or type a custom path.</p>
+								</div>
+
+								<div id="arcos-ftp-wrap" class="arcos-subbox" style="<?php echo in_array( $settings['delivery_method'], [ 'ftp', 'zip_ftp' ], true ) ? '' : 'display:none;'; ?>">
+									<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:8px;">
+										<div>
+											<label for="arcos-ftp-host"><strong>FTP Host:</strong></label><br />
+											<input type="text" id="arcos-ftp-host" value="<?php echo esc_attr( $settings['ftp_host'] ); ?>" class="regular-text" style="width:100%;margin-top:4px;" placeholder="e.g. ftp.example.com" />
+										</div>
+										<div>
+											<label for="arcos-ftp-port"><strong>Port:</strong></label><br />
+											<input type="number" id="arcos-ftp-port" value="<?php echo esc_attr( (string) $settings['ftp_port'] ); ?>" min="1" max="65535" style="width:100%;margin-top:4px;" />
+										</div>
+									</div>
+									<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px;">
+										<div>
+											<label for="arcos-ftp-user"><strong>Username:</strong></label><br />
+											<input type="text" id="arcos-ftp-user" value="<?php echo esc_attr( $settings['ftp_user'] ); ?>" class="regular-text" style="width:100%;margin-top:4px;" autocomplete="off" />
+										</div>
+										<div>
+											<label for="arcos-ftp-pass"><strong>Password:</strong></label><br />
+											<input type="password" id="arcos-ftp-pass" value="" class="regular-text" style="width:100%;margin-top:4px;" autocomplete="new-password" placeholder="<?php echo ! empty( $settings['ftp_pass'] ) ? '•••••••• (saved — leave blank to keep)' : 'FTP password'; ?>" />
+										</div>
+									</div>
+									<div style="margin-bottom:8px;">
+										<label for="arcos-ftp-path"><strong>Remote Directory Path:</strong></label><br />
+										<input type="text" id="arcos-ftp-path" value="<?php echo esc_attr( $settings['ftp_path'] ); ?>" class="large-text" style="margin-top:4px;" placeholder="e.g. /public_html/" />
+									</div>
+									<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;">
+										<label><input type="checkbox" id="arcos-ftp-ssl" <?php checked( ! empty( $settings['ftp_ssl'] ) ); ?> /> Use FTPS (SSL/TLS)</label>
+										<label><input type="checkbox" id="arcos-ftp-passive" <?php checked( ! empty( $settings['ftp_passive'] ) ); ?> /> Passive Mode (PASV, recommended)</label>
+									</div>
+									<p style="margin:8px 0 0;">
+										<button type="button" id="arcos-test-ftp-btn" class="button button-secondary button-small">Test FTP Connection</button>
+										<span id="arcos-ftp-status" style="margin-left:8px;font-weight:600;"></span>
+									</p>
+								</div>
+							</td>
+						</tr>
+						<tr>
+							<th scope="row"><label for="arcos-base-url">Target Base Path / URL</label></th>
+							<td>
+								<input type="text" id="arcos-base-url" value="<?php echo esc_attr( $settings['base_url'] ); ?>" class="regular-text" />
+								<p class="description">Use <code>/</code> for root-relative hosting or <code>http://localhost:8080/</code>, or enter a full URL like <code>https://example.com/</code>.</p>
+							</td>
+						</tr>
+					</table>
+
+					<div class="arcos-action-bar">
+						<button type="button" id="arcos-start-btn" class="button button-primary button-hero">Run Static Export</button>
+						<button type="button" id="arcos-cancel-btn" class="button button-secondary button-hero" style="display:none;">Cancel Export</button>
+					</div>
+
+					<div id="arcos-progress-wrap" style="display:none;margin-top:18px;">
+						<div style="background:#e2e8f0;border-radius:999px;height:14px;overflow:hidden;">
+							<div id="arcos-progress-bar" style="width:0%;height:100%;background:#2563eb;transition:width .25s ease;"></div>
+						</div>
+						<p id="arcos-status-text" style="font-weight:600;margin:8px 0;"></p>
+						<pre id="arcos-log" style="background:#0f172a;color:#e2e8f0;padding:12px 14px;border-radius:8px;max-height:240px;overflow:auto;font-size:12px;"></pre>
+					</div>
+				</div>
+			</div>
+
+			<!-- TAB 2: SEO, FORMS & SECURITY -->
+			<div class="arcos-tab-panel" data-tab-panel="settings">
+				<div class="arcos-card">
+					<table class="form-table" role="presentation">
+						<tr>
+							<th scope="row">SEO &amp; GEO (SEOPress)</th>
+							<td>
+								<label for="arcos-canonical-domain"><strong>Production Domain for Canonicals &amp; Schema (Optional):</strong></label><br />
+								<input type="url" id="arcos-canonical-domain" value="<?php echo esc_attr( $settings['canonical_domain'] ); ?>" class="regular-text" placeholder="e.g. https://austintrs.com" style="margin:4px 0 8px;" />
+								<p class="description" style="margin-bottom:10px;">When set, <code>&lt;link rel="canonical"&gt;</code>, <code>og:url</code>, JSON-LD schema, and <code>sitemap.xml</code> use this full domain even when asset paths are <code>/</code>.</p>
+								<label style="display:block;margin-bottom:6px;">
+									<input type="checkbox" id="arcos-force-index" <?php checked( ! empty( $settings['force_index'] ) ); ?> />
+									<strong>Strip global <code>noindex</code></strong> — Output <code>index, follow</code> on exported pages even if WordPress CMS has &ldquo;Discourage search engines&rdquo; enabled (preserves per-page SEOPress <code>noindex</code> like Thank You pages)
+								</label>
+								<label style="display:block;margin-bottom:10px;">
+									<input type="checkbox" id="arcos-gen-seo-files" <?php checked( ! empty( $settings['generate_seo_files'] ) ); ?> />
+									<strong>Generate <code>sitemap.xml</code>, <code>robots.txt</code> &amp; <code>llms.txt</code></strong> (uses SEOPress PRO <code>llms.txt</code> template if configured)
+								</label>
+								<label style="display:block;margin-bottom:10px;">
+									<input type="checkbox" id="arcos-gen-htaccess" <?php checked( ! empty( $settings['generate_htaccess'] ) ); ?> />
+									<strong>Generate Optimized <code>.htaccess</code> (Caching &amp; Gzip)</strong> — Adds 1-year browser cache headers for static assets &amp; Gzip compression (Apache/LiteSpeed)
+								</label>
+								<label for="arcos-ga4-id"><strong>Google Tag / GA4 / GTM ID (Optional):</strong></label><br />
+								<input type="text" id="arcos-ga4-id" value="<?php echo esc_attr( $settings['ga4_id'] ); ?>" class="regular-text" placeholder="e.g. GT-PHRS7VL, G-XXXXXXXXXX, or GTM-XXXXXXX" style="margin-top:4px;" />
+								<p class="description">Supports <code>G-</code>, <code>GT-</code>, <code>AW-</code> (<code>gtag.js</code>) and <code>GTM-</code> (Google Tag Manager). Leave blank to keep existing page tags.</p>
+							</td>
+						</tr>
+						<tr>
+							<th scope="row">Post Types to Export</th>
+							<td>
+								<?php foreach ( $post_types as $pt ) : ?>
+									<label style="display:inline-block;margin-right:16px;">
+										<input type="checkbox" class="arcos-pt" value="<?php echo esc_attr( $pt->name ); ?>" checked />
+										<?php echo esc_html( $pt->labels->name ); ?> (<code><?php echo esc_html( $pt->name ); ?></code>)
+									</label>
+								<?php endforeach; ?>
+							</td>
+						</tr>
+						<tr>
+							<th scope="row">Clean Assets &amp; Speed</th>
+							<td>
+								<label style="display:block;margin-bottom:8px;">
+									<input type="checkbox" id="arcos-pagespeed-off" <?php checked( ! empty( $settings['pagespeed_off'] ) ); ?> />
+									Append <code>?PageSpeed=off</code> when rendering pages (recommended on hosts using mod_pagespeed)
+								</label>
+								<label for="arcos-batch-size"><strong>Pages per Batch:</strong></label>
+								<select id="arcos-batch-size" style="margin-left:6px;">
+									<option value="2" <?php selected( (int) $settings['batch_size'], 2 ); ?>>2 (Slow / shared servers)</option>
+									<option value="4" <?php selected( (int) $settings['batch_size'], 4 ); ?>>4 (Recommended)</option>
+									<option value="8" <?php selected( (int) $settings['batch_size'], 8 ); ?>>8 (Fast servers)</option>
+								</select>
+							</td>
+						</tr>
+						<tr>
+							<th scope="row">Bricks Form Bridge</th>
+							<td>
+								<label style="display:block;margin-bottom:8px;">
+									<input type="checkbox" id="arcos-form-bridge" <?php checked( ! empty( $settings['enable_form_bridge'] ) ); ?> />
+									Inject AJAX bridge so Bricks forms submit through WordPress (<code><?php echo esc_html( $rest_url ); ?></code>), resolve dynamic tags, and save submissions
+								</label>
+								<label for="arcos-allowed-origins"><strong>Allowed CORS Origins:</strong></label><br />
+								<input type="text" id="arcos-allowed-origins" value="<?php echo esc_attr( $settings['allowed_origins'] ); ?>" class="regular-text" />
+							</td>
+						</tr>
+						<tr>
+							<th scope="row">Private CMS Mode</th>
+							<td>
+								<label style="display:block;margin-bottom:6px;">
+									<input type="checkbox" id="arcos-private-cms" <?php checked( ! empty( $settings['private_cms_mode'] ) ); ?> />
+									<strong>Lock WordPress frontend</strong> — Redirect logged-out public visitors to <code>wp-login.php</code> (REST form endpoint &amp; internal static exports bypass automatically)
+								</label>
+								<span id="arcos-lock-status" style="font-size:12px;font-weight:600;color:#475569;"></span>
+							</td>
+						</tr>
+					</table>
+					<p class="description" style="margin-top:12px;">Settings on this tab are automatically saved when you click <strong>Run Static Export</strong> on the <strong>Export &amp; Delivery</strong> tab (Private CMS Mode saves immediately).</p>
+				</div>
+			</div>
+
+			<!-- TAB 3: RELEASES & ARCHIVES -->
+			<div class="arcos-tab-panel" data-tab-panel="archives">
+				<div class="arcos-card">
+					<h2>Generated Static Archives</h2>
+					<table class="widefat striped" id="arcos-zips-table">
+						<thead>
+							<tr>
+								<th>Label</th>
+								<th>Archive</th>
+								<th>Size</th>
+								<th>Created</th>
+								<th>Actions</th>
+							</tr>
+						</thead>
+						<tbody>
+							<?php if ( empty( $zips ) ) : ?>
+								<tr id="arcos-empty-row"><td colspan="5">No static exports generated yet.</td></tr>
+							<?php else : ?>
+								<?php foreach ( $zips as $zip_path ) :
+									$fname = basename( $zip_path );
+									$url   = trailingslashit( $storage_url ) . rawurlencode( $fname );
+									$size  = size_format( filesize( $zip_path ), 2 );
+									$mtime = date_i18n( 'Y-m-d H:i:s', filemtime( $zip_path ) );
+									$rel_meta = $releases[ $fname ] ?? [];
+									$r_label  = is_array( $rel_meta ) && ! empty( $rel_meta['label'] ) ? (string) $rel_meta['label'] : '';
+									?>
+									<tr>
+										<td>
+											<span class="arcos-rel-label-text"><?php echo $r_label ? esc_html( $r_label ) : '<em style="color:#94a3b8;">No label</em>'; ?></span>
+											<button type="button" class="button-link arcos-edit-label" data-file="<?php echo esc_attr( $fname ); ?>" data-label="<?php echo esc_attr( $r_label ); ?>" style="margin-left:6px;font-size:12px;">Edit</button>
+										</td>
+										<td><code><?php echo esc_html( $fname ); ?></code></td>
+										<td><?php echo esc_html( $size ); ?></td>
+										<td><?php echo esc_html( $mtime ); ?></td>
+										<td>
+											<a href="<?php echo esc_url( $url ); ?>" class="button button-primary button-small" download>Download ZIP</a>
+											<button type="button" class="button button-secondary button-small arcos-restore-zip" data-file="<?php echo esc_attr( $fname ); ?>">Push / Restore to Folder</button>
+											<button type="button" class="button button-small arcos-del-zip" data-file="<?php echo esc_attr( $fname ); ?>">Delete</button>
+										</td>
+									</tr>
+								<?php endforeach; ?>
+							<?php endif; ?>
+						</tbody>
+					</table>
+				</div>
+			</div>
+
+			<!-- TAB 4: EXPORT LOGS -->
+			<div class="arcos-tab-panel" data-tab-panel="logs">
+				<div class="arcos-card">
+					<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
+						<h2 style="margin:0;">Export Logs</h2>
+						<?php if ( ! empty( $export_logs ) ) : ?>
+							<button type="button" id="arcos-clear-logs" class="button button-small">Clear All Logs</button>
+						<?php endif; ?>
+					</div>
+					<table class="widefat striped" id="arcos-logs-table">
+						<thead>
+							<tr>
+								<th>Date (UTC)</th>
+								<th>Mode / Delivery</th>
+								<th>Label</th>
+								<th>Pages</th>
+								<th>Status</th>
+								<th>Size</th>
+								<th>Actions</th>
+							</tr>
+						</thead>
+						<tbody>
+							<?php if ( empty( $export_logs ) ) : ?>
+								<tr><td colspan="7">No export logs recorded yet.</td></tr>
+							<?php else : ?>
+								<?php foreach ( $export_logs as $lg ) :
+									$lid      = (string) ( $lg['id'] ?? '' );
+									$lfile    = $logs_dir . '/export-' . sanitize_file_name( $lid ) . '.log';
+									$lsize    = file_exists( $lfile ) ? size_format( filesize( $lfile ), 1 ) : '—';
+									$lstatus  = (string) ( $lg['status'] ?? 'running' );
+									$st_bg    = 'completed' === $lstatus ? '#dcfce7' : ( 'failed' === $lstatus ? '#fee2e2' : ( 'cancelled' === $lstatus ? '#fef3c7' : ( 'no_changes' === $lstatus ? '#f1f5f9' : '#dbeafe' ) ) );
+									$st_fg    = 'completed' === $lstatus ? '#166534' : ( 'failed' === $lstatus ? '#991b1b' : ( 'cancelled' === $lstatus ? '#92400e' : ( 'no_changes' === $lstatus ? '#475569' : '#1e40af' ) ) );
+									$dl_url   = add_query_arg( [
+										'action' => 'arcos_ss_download_log',
+										'nonce'  => $nonce,
+										'id'     => $lid,
+									], admin_url( 'admin-ajax.php' ) );
+									?>
+									<tr data-log-id="<?php echo esc_attr( $lid ); ?>">
+										<td><?php echo esc_html( $lg['created_at'] ?? '' ); ?></td>
+										<td><code><?php echo esc_html( ( $lg['mode'] ?? '' ) . ' / ' . ( $lg['delivery'] ?? '' ) ); ?></code></td>
+										<td><?php echo ! empty( $lg['label'] ) ? esc_html( $lg['label'] ) : '<em style="color:#94a3b8;">—</em>'; ?></td>
+										<td><?php echo esc_html( (string) ( $lg['total'] ?? 0 ) ); ?></td>
+										<td>
+											<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;background:<?php echo esc_attr( $st_bg ); ?>;color:<?php echo esc_attr( $st_fg ); ?>;">
+												<?php echo esc_html( ucwords( str_replace( '_', ' ', $lstatus ) ) ); ?>
+											</span>
+										</td>
+										<td><?php echo esc_html( $lsize ); ?></td>
+										<td>
+											<button type="button" class="button button-secondary button-small arcos-view-log" data-id="<?php echo esc_attr( $lid ); ?>">View</button>
+											<a href="<?php echo esc_url( $dl_url ); ?>" class="button button-small">Download</a>
+											<button type="button" class="button button-small arcos-del-log" data-id="<?php echo esc_attr( $lid ); ?>">Delete</button>
+										</td>
+									</tr>
+								<?php endforeach; ?>
+							<?php endif; ?>
+						</tbody>
+					</table>
+				</div>
+			</div>
+
+			<!-- TAB 5: SYSTEM & UPDATES -->
+			<div class="arcos-tab-panel" data-tab-panel="system">
+				<div class="arcos-card">
+					<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;">
+						<h2 style="margin:0;">Server &amp; PHP Readiness Checklist</h2>
+						<span style="font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;background:<?php echo esc_attr( $env_badge_bg ); ?>;color:<?php echo esc_attr( $env_badge_fg ); ?>;">
+							<?php echo esc_html( $env_summary ); ?>
+						</span>
+					</div>
+					<table class="widefat striped" style="margin-bottom:20px;">
+						<thead>
+							<tr>
+								<th>Check</th>
+								<th>Current</th>
+								<th>Recommended</th>
+								<th>Status</th>
+							</tr>
+						</thead>
+						<tbody>
+							<?php foreach ( $env_checks as $c ) :
+								$st_color = 'ok' === $c['status'] ? '#15803d' : ( 'warn' === $c['status'] ? '#b45309' : '#b91c1c' );
+								$st_label = 'ok' === $c['status'] ? '✓ OK' : ( 'warn' === $c['status'] ? '⚠ Tweak' : '✕ Action Needed' );
+							?>
+								<tr>
+									<td><strong><?php echo esc_html( $c['label'] ); ?></strong></td>
+									<td><code><?php echo esc_html( $c['current'] ); ?></code></td>
+									<td><?php echo esc_html( $c['target'] ); ?></td>
 									<td>
-										<span style="display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;background:<?php echo esc_attr( $st_bg ); ?>;color:<?php echo esc_attr( $st_fg ); ?>;">
-											<?php echo esc_html( ucwords( str_replace( '_', ' ', $lstatus ) ) ); ?>
-										</span>
-									</td>
-									<td><?php echo esc_html( $lsize ); ?></td>
-									<td>
-										<button type="button" class="button button-secondary button-small arcos-view-log" data-id="<?php echo esc_attr( $lid ); ?>">View</button>
-										<a href="<?php echo esc_url( $dl_url ); ?>" class="button button-small">Download</a>
-										<button type="button" class="button button-small arcos-del-log" data-id="<?php echo esc_attr( $lid ); ?>">Delete</button>
+										<strong style="color:<?php echo esc_attr( $st_color ); ?>;"><?php echo esc_html( $st_label ); ?></strong>
+										<?php if ( '' !== $c['tip'] ) : ?>
+											<div style="font-size:12px;color:#475569;margin-top:2px;"><?php echo esc_html( $c['tip'] ); ?></div>
+										<?php endif; ?>
 									</td>
 								</tr>
 							<?php endforeach; ?>
+						</tbody>
+					</table>
+
+					<h2>GitHub Plugin Updates</h2>
+					<div class="arcos-subbox">
+						<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
+							<button type="button" id="arcos-check-updates" class="button button-secondary">Check for Updates Now</button>
+							<span id="arcos-update-status" style="font-size:12px;font-weight:600;color:#475569;"></span>
+						</div>
+						<p class="description" style="margin-bottom:6px;">Automatic updates from GitHub Releases: <code><?php echo esc_html( self::GITHUB_REPO ); ?></code> (no token required for public repos).</p>
+						<?php
+						$has_const_token = defined( 'ARCOS_STATIC_SITES_GITHUB_TOKEN' ) && is_string( ARCOS_STATIC_SITES_GITHUB_TOKEN ) && '' !== trim( ARCOS_STATIC_SITES_GITHUB_TOKEN );
+						$has_saved_token = ! empty( $settings['github_token'] );
+						?>
+						<?php if ( $has_const_token ) : ?>
+							<p class="description">Authenticated via <code>ARCOS_STATIC_SITES_GITHUB_TOKEN</code> in <code>wp-config.php</code>.</p>
+						<?php else : ?>
+							<details style="margin-top:4px;">
+								<summary style="cursor:pointer;font-size:12px;color:#475569;">Optional: GitHub Token (only for private forks / rate limits)</summary>
+								<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px;">
+									<input type="password" id="arcos-github-token" value="" class="regular-text" autocomplete="new-password" placeholder="<?php echo $has_saved_token ? '•••••••••••••••• (token saved — enter new to replace)' : 'github_pat_... (optional)'; ?>" />
+									<button type="button" id="arcos-save-token" class="button button-small">Save Token</button>
+									<?php if ( $has_saved_token ) : ?>
+										<button type="button" id="arcos-clear-token" class="button button-small">Clear</button>
+									<?php endif; ?>
+								</div>
+							</details>
 						<?php endif; ?>
-					</tbody>
-				</table>
+					</div>
+				</div>
 			</div>
 
 			<div id="arcos-log-modal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.65);z-index:100100;align-items:center;justify-content:center;padding:24px;">
@@ -1419,6 +1478,24 @@ class Arcos_Static_Sites {
 
 		<script>
 		(function() {
+			const tabBtns   = document.querySelectorAll('.arcos-tab-btn');
+			const tabPanels = document.querySelectorAll('.arcos-tab-panel');
+			function activateTab(tabName) {
+				if (!tabName) return;
+				tabBtns.forEach(b => b.classList.toggle('is-active', b.dataset.tab === tabName));
+				tabPanels.forEach(p => p.classList.toggle('is-active', p.dataset.tabPanel === tabName));
+				try { sessionStorage.setItem('arcos_ss_active_tab', tabName); } catch (_) {}
+			}
+			tabBtns.forEach(btn => {
+				btn.addEventListener('click', () => activateTab(btn.dataset.tab));
+			});
+			try {
+				const savedTab = sessionStorage.getItem('arcos_ss_active_tab');
+				if (savedTab && document.querySelector('.arcos-tab-btn[data-tab="' + savedTab + '"]')) {
+					activateTab(savedTab);
+				}
+			} catch (_) {}
+
 			const ajaxUrl   = <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>;
 			const nonce     = <?php echo wp_json_encode( $nonce ); ?>;
 			const startBtn  = document.getElementById('arcos-start-btn');
@@ -2203,6 +2280,30 @@ class Arcos_Static_Sites {
 						if ( 'full' === $mode || $global_dirty ) {
 							$items[] = [ 'id' => 0, 'url' => $arch_url, 'mod' => gmdate( 'Y-m-d H:i:s' ) ];
 						}
+					}
+				}
+			}
+
+			// Include public taxonomy term archives (categories, tags, and public custom taxonomies)
+			$taxonomies = get_taxonomies( [ 'public' => true ], 'names' );
+			unset( $taxonomies['post_format'] );
+			$tax_dirty = ( 'full' === $mode || $global_dirty || ! empty( $items ) );
+			foreach ( $taxonomies as $tax ) {
+				$terms = get_terms( [
+					'taxonomy'   => $tax,
+					'hide_empty' => true,
+				] );
+				if ( is_wp_error( $terms ) || empty( $terms ) ) {
+					continue;
+				}
+				foreach ( $terms as $term ) {
+					$term_url = get_term_link( $term );
+					if ( is_wp_error( $term_url ) || ! $term_url || isset( $seen_urls[ $term_url ] ) ) {
+						continue;
+					}
+					$seen_urls[ $term_url ] = true;
+					if ( $tax_dirty ) {
+						$items[] = [ 'id' => 0, 'url' => $term_url, 'mod' => gmdate( 'Y-m-d H:i:s' ) ];
 					}
 				}
 			}
