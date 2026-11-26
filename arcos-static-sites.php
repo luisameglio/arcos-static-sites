@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Arcos Static Sites
  * Description: Generate clean, rate-limit-free static HTML/CSS/JS/media ZIP exports or push directly to a same-server live directory, with incremental delta builds and Bricks + ACF dynamic tag form bridging.
- * Version: 1.9.12
+ * Version: 1.9.13
  * Author: Arcos Multimedia Group
  * License: GPL-2.0-or-later
  * Update URI: https://github.com/luisameglio/arcos-static-sites
@@ -33,7 +33,7 @@ class Arcos_Static_Sites {
 	use Arcos_Static_Sites_Logs;
 
 
-	const VERSION          = '1.9.12';
+	const VERSION          = '1.9.13';
 	const GITHUB_REPO      = 'luisameglio/arcos-static-sites';
 	const UPDATE_CACHE_KEY = 'arcos_static_sites_gh_update';
 	const NONCE_ACTION     = 'arcos_static_sites_nonce';
@@ -87,6 +87,8 @@ class Arcos_Static_Sites {
 			'force_index'        => 1,
 			'generate_seo_files' => 1,
 			'generate_htaccess'  => 0,
+			'export_taxonomies'  => 1,
+			'export_tags'        => 0,
 			'ga4_id'             => '',
 			'private_cms_mode'   => 0,
 			'github_token'       => '',

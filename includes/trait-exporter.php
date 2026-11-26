@@ -44,9 +44,11 @@ trait Arcos_Static_Sites_Exporter {
 		$release_label    = isset( $_POST['release_label'] ) ? sanitize_text_field( wp_unslash( $_POST['release_label'] ) ) : '';
 		$canonical_domain = isset( $_POST['canonical_domain'] ) ? esc_url_raw( wp_unslash( $_POST['canonical_domain'] ) ) : '';
 		$force_index      = ! isset( $_POST['force_index'] ) || '1' === $_POST['force_index'];
-		$gen_seo_files    = ! isset( $_POST['gen_seo_files'] ) || '1' === $_POST['gen_seo_files'];
-		$gen_htaccess     = isset( $_POST['gen_htaccess'] ) && '1' === $_POST['gen_htaccess'];
-		$ga4_id           = isset( $_POST['ga4_id'] ) ? sanitize_text_field( wp_unslash( $_POST['ga4_id'] ) ) : '';
+		$gen_seo_files     = ! isset( $_POST['gen_seo_files'] ) || '1' === $_POST['gen_seo_files'];
+		$gen_htaccess      = isset( $_POST['gen_htaccess'] ) && '1' === $_POST['gen_htaccess'];
+		$export_taxonomies = ! isset( $_POST['export_taxonomies'] ) || '1' === $_POST['export_taxonomies'];
+		$export_tags       = isset( $_POST['export_tags'] ) && '1' === $_POST['export_tags'];
+		$ga4_id            = isset( $_POST['ga4_id'] ) ? sanitize_text_field( wp_unslash( $_POST['ga4_id'] ) ) : '';
 		$pagespeed_off    = isset( $_POST['pagespeed_off'] ) && '1' === $_POST['pagespeed_off'];
 		$batch_size       = isset( $_POST['batch_size'] ) ? max( 1, min( 12, (int) $_POST['batch_size'] ) ) : 4;
 		$form_bridge      = ! isset( $_POST['form_bridge'] ) || '1' === $_POST['form_bridge'];
@@ -110,6 +112,8 @@ trait Arcos_Static_Sites_Exporter {
 			'force_index'        => $force_index ? 1 : 0,
 			'generate_seo_files' => $gen_seo_files ? 1 : 0,
 			'generate_htaccess'  => $gen_htaccess ? 1 : 0,
+			'export_taxonomies'  => $export_taxonomies ? 1 : 0,
+			'export_tags'        => $export_tags ? 1 : 0,
 			'ga4_id'             => $ga4_id,
 			'private_cms_mode'   => ! empty( $prev_settings['private_cms_mode'] ) ? 1 : 0,
 			'github_token'       => isset( $prev_settings['github_token'] ) ? (string) $prev_settings['github_token'] : '',
@@ -179,8 +183,17 @@ trait Arcos_Static_Sites_Exporter {
 			$wpml_orig   = $wpml_active ? apply_filters( 'wpml_current_language', null ) : null;
 			$lang_passes = $wpml_active ? array_keys( $wpml_langs ) : [ null ];
 
-			$taxonomies = get_taxonomies( [ 'public' => true ], 'names' );
-			unset( $taxonomies['post_format'] );
+			$taxonomies = [];
+			if ( $export_taxonomies || $export_tags ) {
+				$taxonomies = get_taxonomies( [ 'public' => true ], 'names' );
+				unset( $taxonomies['post_format'] );
+				if ( ! $export_tags ) {
+					unset( $taxonomies['post_tag'] );
+				}
+				if ( ! $export_taxonomies ) {
+					$taxonomies = isset( $taxonomies['post_tag'] ) ? [ 'post_tag' => 'post_tag' ] : [];
+				}
+			}
 
 			foreach ( $lang_passes as $lang_code ) {
 				if ( $wpml_active && null !== $lang_code ) {

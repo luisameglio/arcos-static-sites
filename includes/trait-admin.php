@@ -524,6 +524,19 @@ trait Arcos_Static_Sites_Admin {
 							</td>
 						</tr>
 						<tr>
+							<th scope="row">Taxonomy Archives</th>
+							<td>
+								<label style="display:block;margin-bottom:6px;">
+									<input type="checkbox" id="arcos-export-taxonomies" <?php checked( ! empty( $settings['export_taxonomies'] ) ); ?> />
+									<strong>Export Categories &amp; Custom Taxonomy Archives</strong> (<code>/category/...</code>, custom taxonomies)
+								</label>
+								<label style="display:block;">
+									<input type="checkbox" id="arcos-export-tags" <?php checked( ! empty( $settings['export_tags'] ) ); ?> />
+									<strong>Export Post Tag Archives</strong> (<code>/tag/...</code> — leave unchecked to avoid generating dozens of tag pages)
+								</label>
+							</td>
+						</tr>
+						<tr>
 							<th scope="row">Clean Assets &amp; Speed</th>
 							<td>
 								<label style="display:block;margin-bottom:8px;">
@@ -980,6 +993,8 @@ trait Arcos_Static_Sites_Admin {
 						force_index: forceIndex,
 						gen_seo_files: genSeoFiles,
 						gen_htaccess: genHtaccess,
+						export_taxonomies: document.getElementById('arcos-export-taxonomies') && document.getElementById('arcos-export-taxonomies').checked ? '1' : '0',
+						export_tags: document.getElementById('arcos-export-tags') && document.getElementById('arcos-export-tags').checked ? '1' : '0',
 						ga4_id: ga4Id,
 						pagespeed_off: pagespeedOff,
 						batch_size: batchSize,
